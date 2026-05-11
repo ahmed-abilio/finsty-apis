@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Firebase OTP Login</title>
+</head>
+<body>
+  <h2>Firebase OTP Login</h2>
+
+  <!-- Phone Input -->
+  <input type="text" id="phone" placeholder="+91XXXXXXXXXX" />
+  <button onclick="sendOTP()">Send OTP</button>
+
+  <br><br>
+
+  <!-- OTP Input -->
+  <input type="text" id="otp" placeholder="Enter OTP" />
+  <button onclick="verifyOTP()">Verify OTP</button>
+
+  <!-- Recaptcha -->
+  <div id="recaptcha-container"></div>
+
+  <!-- Firebase Modular SDK -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+    import {
+      getAuth,
+      RecaptchaVerifier,
+      signInWithPhoneNumber
+    } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+    // 🔑 Your Firebase config
+    const firebaseConfig = {
+      apiKey: "AIzaSyDrUbVzcQVAE-NZVPMq0oHr7GIaL95valw",
+      authDomain: "test-42a2c.firebaseapp.com",
+      projectId: "test-42a2c",
+      appId: "1:247998825720:web:af09ec32c16aaf0090e70d",
+    };
+
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+
+    let confirmationResult;
+
+    // Setup reCAPTCHA
+    window.recaptchaVerifier = new RecaptchaVerifier(
+      auth,
+      "recaptcha-container",
+      {
+        size: "invisible", // or 'invisible'
+      }
+    );
+
+    // Send OTP
+    window.sendOTP = async function () {
+      const phoneNumber = document.getElementById("phone").value;
+
+      if (!phoneNumber) {
+        alert("Enter phone number");
+        return;
+      }
+
+      try {
+        confirmationResult = await signInWithPhoneNumber(
+          auth,
+          phoneNumber,
+          window.recaptchaVerifier
+        );
+        alert("OTP sent!");
+      } catch (error) {
+        console.error(error);
+        alert(error.message);
+      }
+    };
+
+    // Verify OTP
+    window.verifyOTP = async function () {
+      const otp = document.getElementById("otp").value;
+
+      if (!otp) {
+        alert("Enter OTP");
+        return;
+      }
+
+      try {
+        const result = await confirmationResult.confirm(otp);
+        const user = result.user;
+
+        alert("Login successful!");
+
+        console.log("UID:", user.uid);
+
+        const token = await user.getIdToken();
+        console.log("ID Token:", token);
+        console.log("user data",user);
+        
+        // 👉 Send this token to your backend
+        // fetch('/api/auth/firebase', { method: 'POST', body: JSON.stringify({ token }) });
+
+      } catch (error) {
+        console.error(error);
+        alert("Invalid OTP");
+      }
+    };
+  </script>
+</body>
+</html>
