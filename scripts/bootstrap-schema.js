@@ -5,21 +5,27 @@ require('dotenv/config');
 require('../dist/config/associations');
 const sequelize = require('../dist/config/database').default;
 
-async function hasStoresTable() {
+async function needsBootstrap() {
   const [rows] = await sequelize.query(`
-    SELECT 1 AS found
-    FROM information_schema.tables
-    WHERE table_schema = 'public' AND table_name = 'stores'
-    LIMIT 1
+    SELECT
+      EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'user_users'
+      ) AS has_user_users,
+      EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = 'orders'
+      ) AS has_orders
   `);
-  return rows.length > 0;
+  const row = rows[0];
+  return !row.has_user_users && !row.has_orders;
 }
 
 async function main() {
   await sequelize.authenticate();
 
-  if (await hasStoresTable()) {
-    console.log('[bootstrap] Database already has tables — skipping schema sync');
+  if (!(await needsBootstrap())) {
+    console.log('[bootstrap] Core tables already present — skipping schema sync');
     return;
   }
 
