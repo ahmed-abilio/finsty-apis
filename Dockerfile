@@ -31,7 +31,7 @@ RUN addgroup -g 1001 -S nodejs && adduser -S fastify -u 1001
 COPY --from=builder --chown=fastify:nodejs /app/dist ./dist
 COPY --from=builder --chown=fastify:nodejs /app/node_modules ./node_modules
 COPY --from=builder --chown=fastify:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=fastify:nodejs /app/migrations ./migrations
+COPY --chown=fastify:nodejs migrations ./migrations
 COPY --chown=fastify:nodejs .sequelizerc ./
 COPY --chown=fastify:nodejs src/config/sequelize-cli.js ./src/config/sequelize-cli.js
 COPY --chown=fastify:nodejs scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
