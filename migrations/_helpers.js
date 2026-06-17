@@ -11,7 +11,16 @@ async function tableExists(queryInterface, tableName) {
   return normalizeTableNames(tables).has(tableName);
 }
 
+async function columnExists(queryInterface, tableName, columnName) {
+  if (!(await tableExists(queryInterface, tableName))) {
+    return false;
+  }
+  const columns = await queryInterface.describeTable(tableName);
+  return Object.prototype.hasOwnProperty.call(columns, columnName);
+}
+
 module.exports = {
   normalizeTableNames,
   tableExists,
+  columnExists,
 };
