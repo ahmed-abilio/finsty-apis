@@ -7,6 +7,7 @@ import {
   appleSignInSchema,
   refreshTokenSchema,
   logoutSchema,
+  createAdminSchema,
   adminSendOtpSchema,
   adminVerifyOtpSchema,
   vendorSendOtpSchema,
@@ -35,6 +36,12 @@ export default async function authRoutes(fastify: FastifyInstance): Promise<void
   );
 
   // Admin auth routes
+  fastify.post(
+    '/admin/create',
+    { schema: createAdminSchema },
+    authController.createAdmin.bind(authController),
+  );
+
   fastify.post(
     '/admin/send-otp',
     { schema: adminSendOtpSchema },

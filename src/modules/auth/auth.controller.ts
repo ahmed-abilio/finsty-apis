@@ -32,6 +32,11 @@ interface RoleVerifyOtpBody extends DeviceTokenAuthInput {
   otp: string;
 }
 
+interface CreateAdminBody {
+  phone: string;
+  superKey: string;
+}
+
 class AuthController {
   async sendOtp(
     request: FastifyRequest<{ Body: SendOtpBody }>,
@@ -71,6 +76,20 @@ class AuthController {
   ): Promise<void> {
     await authService.sendOtp(request.body.phone);
     void reply.status(200).send({ success: true, data: { message: 'OTP sent successfully' } });
+  }
+
+  async createAdmin(
+    request: FastifyRequest<{ Body: CreateAdminBody }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const user = await authService.createAdmin(request.body.phone, request.body.superKey);
+    void reply.status(201).send({
+      success: true,
+      data: {
+        user: user.toPublicJSON(),
+        message: 'Admin account created. Use admin OTP login to sign in.',
+      },
+    });
   }
 
   async adminVerifyOtp(

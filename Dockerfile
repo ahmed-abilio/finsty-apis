@@ -36,6 +36,7 @@ COPY --chown=fastify:nodejs .sequelizerc ./
 COPY --chown=fastify:nodejs src/config/sequelize-cli.js ./src/config/sequelize-cli.js
 COPY --chown=fastify:nodejs scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
 COPY --chown=fastify:nodejs scripts/bootstrap-schema.js ./scripts/bootstrap-schema.js
+COPY --chown=fastify:nodejs scripts/migration-helpers.js ./scripts/migration-helpers.js
 
 # Copy the Firebase service account JSON at runtime via docker-compose volume mount.
 # Do not bake credentials into the image.

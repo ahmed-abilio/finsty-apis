@@ -34,7 +34,7 @@ vi.mock('jsonwebtoken', () => ({
   default: { sign: mocks.signMock, verify: mocks.verifyMock },
 }));
 
-import { googleSignIn, verifyOtp } from './auth.service';
+import { googleSignIn, verifyOtp, createAdmin } from './auth.service';
 
 function makeUser(overrides: Record<string, unknown> = {}) {
   return {
@@ -140,6 +140,52 @@ describe('auth.service role-table auth', () => {
       }),
     );
     expect(result.isNew).toBe(true);
+  });
+});
+
+describe('auth.service createAdmin', () => {
+  const phone = '+911234567890';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.SUPER_KEY = 'test-super-key';
+  });
+
+  it('creates admin when super key is valid and phone is new', async () => {
+    const admin = makeUser({ role: 'admin', phone });
+    mocks.userServiceMock.findByPhoneForRole.mockResolvedValue(null);
+    mocks.userServiceMock.upsertForRole.mockResolvedValue([admin, true]);
+
+    const user = await createAdmin(phone, 'test-super-key');
+
+    expect(mocks.userServiceMock.findByPhoneForRole).toHaveBeenCalledWith(phone, { role: 'admin' });
+    expect(mocks.userServiceMock.upsertForRole).toHaveBeenCalledWith(
+      expect.objectContaining({
+        firebaseUid: phone,
+        phone,
+        role: 'admin',
+        provider: 'phone',
+        isActive: true,
+      }),
+      { role: 'admin' },
+    );
+    expect(user).toBe(admin);
+  });
+
+  it('rejects invalid super key', async () => {
+    await expect(createAdmin(phone, 'wrong-key')).rejects.toMatchObject({
+      code: 'INVALID_SUPER_KEY',
+    });
+    expect(mocks.userServiceMock.upsertForRole).not.toHaveBeenCalled();
+  });
+
+  it('rejects when admin already exists for phone', async () => {
+    mocks.userServiceMock.findByPhoneForRole.mockResolvedValue(makeUser({ role: 'admin', phone }));
+
+    await expect(createAdmin(phone, 'test-super-key')).rejects.toMatchObject({
+      code: 'ADMIN_ALREADY_EXISTS',
+    });
+    expect(mocks.userServiceMock.upsertForRole).not.toHaveBeenCalled();
   });
 });
 

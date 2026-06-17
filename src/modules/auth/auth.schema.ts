@@ -322,6 +322,81 @@ const otpSentResponse = {
   400: validationErrorResponse,
 } as const;
 
+// ─── POST /auth/admin/create ──────────────────────────────────────────────────
+
+const createAdminBody = {
+  type: 'object',
+  required: ['phone', 'superKey'],
+  properties: {
+    phone: {
+      type: 'string',
+      description: 'Phone number in E.164 format (e.g. +2348012345678)',
+      pattern: '^\\+[1-9]\\d{6,14}$',
+    },
+    superKey: {
+      type: 'string',
+      minLength: 1,
+      description: 'Bootstrap secret matching the SUPER_KEY environment variable',
+    },
+  },
+  additionalProperties: false,
+} as const;
+
+export const createAdminSchema: FastifySchema = {
+  tags: ['Admin Auth'],
+  summary: 'Create an admin account (bootstrap)',
+  description:
+    'Creates a new admin user for the given phone number. Requires the SUPER_KEY env secret. ' +
+    'After creation, the admin signs in via POST /auth/admin/send-otp and /auth/admin/verify-otp.',
+  body: createAdminBody,
+  response: {
+    201: {
+      description: 'Admin account created',
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            user: {
+              type: 'object',
+              properties: {
+                id: { type: 'string' },
+                firebaseUid: { type: 'string' },
+                phone: { type: 'string', nullable: true },
+                email: { type: 'string', nullable: true },
+                role: { type: 'string' },
+                provider: { type: 'string' },
+                isActive: { type: 'boolean' },
+                referralCode: { type: 'string' },
+                createdAt: { type: 'string' },
+                updatedAt: { type: 'string' },
+              },
+            },
+            message: { type: 'string' },
+          },
+        },
+      },
+    },
+    400: validationErrorResponse,
+    401: { ...unauthorizedResponse, description: 'Invalid super key' },
+    409: {
+      description: 'Admin already exists for this phone number',
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: {
+          type: 'object',
+          properties: {
+            code: { type: 'string' },
+            message: { type: 'string' },
+          },
+        },
+      },
+    },
+  },
+};
+
 // ─── POST /auth/admin/send-otp ────────────────────────────────────────────────
 
 export const adminSendOtpSchema: FastifySchema = {

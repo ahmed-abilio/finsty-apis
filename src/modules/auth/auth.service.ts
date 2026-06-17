@@ -51,6 +51,37 @@ export async function sendOtp(phone: string): Promise<void> {
   await otpService.sendPhoneOtp(phone);
 }
 
+export async function createAdmin(phone: string, superKey: string): Promise<User> {
+  const configuredKey = process.env.SUPER_KEY;
+  if (!configuredKey) {
+    throw AppError.internal('SUPER_KEY is not configured', 'SUPER_KEY_NOT_CONFIGURED');
+  }
+  if (!superKey || superKey !== configuredKey) {
+    throw AppError.unauthorized('Invalid super key', 'INVALID_SUPER_KEY');
+  }
+
+  const existing = await userService.findByPhoneForRole(phone, { role: Roles.ADMIN });
+  if (existing) {
+    throw AppError.conflict(
+      'An admin account already exists for this phone number',
+      'ADMIN_ALREADY_EXISTS',
+    );
+  }
+
+  const [user] = await userService.upsertForRole(
+    {
+      firebaseUid: phone,
+      phone,
+      provider: 'phone',
+      role: Roles.ADMIN,
+      isActive: true,
+    },
+    { role: Roles.ADMIN },
+  );
+
+  return user;
+}
+
 export async function verifyOtp(
   phone: string,
   otp: string,
