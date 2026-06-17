@@ -1,0 +1,91 @@
+# Local development compose (optional). Production/server uses docker-compose.yml.
+#
+#   docker compose -f docker-compose.dev.yml up --build
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    container_name: finsty-app
+    restart: unless-stopped
+    ports:
+      - '${PORT:-3000}:${PORT:-3000}'
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
+      REDIS_HOST: redis
+      RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-true}
+      FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
+    volumes:
+      - ./firebase-service-account.json:/run/secrets/firebase-service-account.json:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - finsty-network
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    env_file:
+      - .env
+    environment:
+      RUN_MIGRATIONS_ON_START: "false"
+    entrypoint:
+      - npx
+      - sequelize-cli
+      - db:migrate
+      - --env
+      - production
+    networks:
+      - finsty-network
+    profiles:
+      - tools
+
+  redis:
+    image: redis:7-alpine
+    container_name: finsty-redis
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - |
+        if [ -n "$$REDIS_PASSWORD" ]; then
+          exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --appendfsync everysec
+        else
+          exec redis-server --appendonly yes --appendfsync everysec
+        fi
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - |
+          if [ -n "$$REDIS_PASSWORD" ]; then
+            redis-cli -a "$$REDIS_PASSWORD" ping | grep -q PONG
+          else
+            redis-cli ping | grep -q PONG
+          fi
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - finsty-network
+
+volumes:
+  redis_data:
+
+networks:
+  finsty-network:
+    driver: bridge

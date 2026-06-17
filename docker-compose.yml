@@ -1,18 +1,30 @@
+# EC2 / production:  docker compose up -d --build
+# Local dev (optional): docker compose -f docker-compose.dev.yml up --build
+#
+# Before first run on server:
+#   cp .env.production.example .env
+#   # add firebase-service-account.json (not in git)
+
 services:
-  # ─── Application ──────────────────────────────────────────────────────────
   app:
     build:
       context: .
       dockerfile: Dockerfile
       target: runner
+    image: finsty-apis:local
+    pull_policy: never
     container_name: finsty-app
     restart: unless-stopped
     ports:
-      - '${PORT:-3000}:3000'
+      - '${PORT:-3000}:${PORT:-3000}'
     env_file:
       - .env
     environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: ${PORT:-3000}
       REDIS_HOST: redis
+      REDIS_PORT: 6379
       RUN_MIGRATIONS_ON_START: ${RUN_MIGRATIONS_ON_START:-true}
       FIREBASE_SERVICE_ACCOUNT_PATH: /run/secrets/firebase-service-account.json
     volumes:
@@ -22,35 +34,26 @@ services:
         condition: service_healthy
     networks:
       - finsty-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - node -e "const p=process.env.PORT||3000; require('http').get('http://127.0.0.1:'+p+'/health', r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
 
-  # ─── One-off migrations (same image, no Redis dependency) ───────────────
-  migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runner
-    env_file:
-      - .env
-    environment:
-      RUN_MIGRATIONS_ON_START: "false"
-    entrypoint:
-      - npx
-      - sequelize-cli
-      - db:migrate
-      - --env
-      - production
-    networks:
-      - finsty-network
-    profiles:
-      - tools
-
-  # ─── Redis ────────────────────────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     container_name: finsty-redis
     restart: unless-stopped
-    # Not published to the host — app reaches Redis at redis:6379 on finsty-network.
-    # If you need host access (e.g. redis-cli), add: ports: ['6380:6379']
+    env_file:
+      - .env
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     command:
@@ -58,12 +61,29 @@ services:
       - -c
       - |
         if [ -n "$$REDIS_PASSWORD" ]; then
-          exec redis-server --requirepass "$$REDIS_PASSWORD" --appendonly yes --appendfsync everysec
+          exec redis-server \
+            --requirepass "$$REDIS_PASSWORD" \
+            --appendonly yes \
+            --appendfsync everysec \
+            --maxmemory 256mb \
+            --maxmemory-policy allkeys-lru
         else
-          exec redis-server --appendonly yes --appendfsync everysec
+          echo "WARNING: REDIS_PASSWORD is not set — Redis is running without auth (not recommended for production)"
+          exec redis-server \
+            --appendonly yes \
+            --appendfsync everysec \
+            --maxmemory 256mb \
+            --maxmemory-policy allkeys-lru
         fi
     volumes:
       - redis_data:/data
+    networks:
+      - finsty-network
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
     healthcheck:
       test:
         - CMD-SHELL
@@ -76,8 +96,29 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  migrate:
+    image: finsty-apis:local
+    pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      RUN_MIGRATIONS_ON_START: "false"
+    entrypoint:
+      - npx
+      - sequelize-cli
+      - db:migrate
+      - --env
+      - production
     networks:
       - finsty-network
+    profiles:
+      - tools
 
 volumes:
   redis_data:
