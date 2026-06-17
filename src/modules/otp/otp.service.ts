@@ -2,10 +2,21 @@ import redis from '@config/redis';
 import logger from '@utils/logger';
 import { AppError } from '@utils/appError';
 import { addStoreOtpJob } from '@queues/emailQueue';
+import { sendBhashSms } from '@utils/bhashSms';
 
-// TODO: replace with a real SMS/email OTP provider (Twilio, Termii, etc.)
-const OTP_VALUE = '1234';
 const OTP_TTL = 600; // 10 minutes
+
+function isBhashSmsEnabled(): boolean {
+  console.log(process.env.USE_BHASH_SMS,"checking env")
+  return (process.env.USE_BHASH_SMS ?? '').trim().toLowerCase() === 'true';
+}
+
+function generateOtp(): string {
+  if (!isBhashSmsEnabled()) {
+    return '1234';
+  }
+  return String(Math.floor(1000 + Math.random() * 9000));
+}
 
 // ─── Redis key helpers ────────────────────────────────────────────────────────
 
@@ -28,9 +39,15 @@ class OtpService {
   // ─── Phone ────────────────────────────────────────────────────────────────
 
   async sendPhoneOtp(phone: string): Promise<void> {
-    await redis.set(phoneOtpKey(phone), OTP_VALUE, 'EX', OTP_TTL);
-    // TODO: send real SMS via provider
-    logger.info({ phone }, 'Phone OTP sent (stub)');
+    const useBhashSms = isBhashSmsEnabled();
+    const otp = generateOtp();
+    await redis.set(phoneOtpKey(phone), otp, 'EX', OTP_TTL);
+
+    if (useBhashSms) {
+      await sendBhashSms(phone, `Your OTP for mobile login is ${otp}. Please do not share this OTP with anyone.AWEARO FASHION PRIVATE LIMITED`);
+    } else {
+      logger.info({ phone, otp }, 'Phone OTP sent (stub)');
+    }
   }
 
   async verifyPhoneOtp(phone: string, otp: string): Promise<void> {
@@ -45,9 +62,10 @@ class OtpService {
   // ─── Email ────────────────────────────────────────────────────────────────
 
   async sendEmailOtp(email: string): Promise<void> {
-    await redis.set(emailOtpKey(email), OTP_VALUE, 'EX', OTP_TTL);
+    const otp = generateOtp();
+    await redis.set(emailOtpKey(email), otp, 'EX', OTP_TTL);
     try {
-      await addStoreOtpJob(email, OTP_VALUE);
+      await addStoreOtpJob(email, otp);
     } catch (err) {
       logger.error({ err, email }, 'Failed to enqueue email OTP job');
     }

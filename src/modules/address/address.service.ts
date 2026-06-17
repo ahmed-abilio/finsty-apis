@@ -1,5 +1,19 @@
+import { Op } from 'sequelize';
 import Address, { AddressCreationAttributes, AddressLabel } from './address.model';
 import { AppError } from '@utils/appError';
+
+/** Default address first, then oldest createdAt among the rest. */
+export function sortAddressesDefaultFirst(rows: Address[]): Address[] {
+  return [...rows].sort((a, b) => {
+    if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+    return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+  });
+}
+
+const addressListOrder: [string, string][] = [
+  ['isDefault', 'DESC'],
+  ['createdAt', 'ASC'],
+];
 
 export interface CreateAddressInput {
   label?: AddressLabel;
@@ -32,11 +46,34 @@ export interface UpdateAddressInput {
 
 class AddressService {
   async list(userId: string): Promise<Address[]> {
-    const raw = await Address.findAll({ where: { userId }, raw: true });
-    console.log(raw);
-    return await Address.findAll({
+    let addresses = await Address.findAll({
       where: { userId },
-      order: [['isDefault', 'DESC'], ['createdAt', 'ASC']],
+      order: addressListOrder,
+    });
+
+    const defaults = addresses.filter((a) => a.isDefault);
+    if (defaults.length > 1) {
+      const keeper = [...defaults].sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+      )[0]!;
+      await Address.update(
+        { isDefault: false },
+        { where: { userId, id: { [Op.ne]: keeper.id } } },
+      );
+      addresses = await Address.findAll({
+        where: { userId },
+        order: addressListOrder,
+      });
+    }
+
+    return sortAddressesDefaultFirst(addresses);
+  }
+
+  /** User's default delivery address, if any. */
+  async getDefaultAddress(userId: string): Promise<Address | null> {
+    return Address.findOne({
+      where: { userId, isDefault: true },
+      order: [['updatedAt', 'DESC']],
     });
   }
 

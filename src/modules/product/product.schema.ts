@@ -1,5 +1,7 @@
 import type { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Shared error response shapes ─────────────────────────────────────────────
 
 const unauthorized = {
@@ -95,6 +97,7 @@ const variantObject = {
     productId: { type: 'string', format: 'uuid' },
     colorId: { type: 'string', format: 'uuid' },
     size: { type: 'string', nullable: true },
+    sizeChart: { type: 'string', nullable: true, description: 'Size chart image URL when set' },
     sku: { type: 'string', nullable: true },
     stock: { type: 'number' },
     additionalPrice: { type: 'number' },
@@ -171,6 +174,19 @@ const productObject = {
 
 // ─── Reusable input fragments ─────────────────────────────────────────────────
 
+/** AJV `format: uri` rejects empty strings and some valid S3 URLs — use explicit anyOf instead. */
+const optionalMediaUrlInput = {
+  description:
+    'Optional media reference: HTTPS `publicUrl` from presigned upload, S3 `key` (`uploads/...`), ' +
+    'or omit/null/empty when not set.',
+  anyOf: [
+    { type: 'null' },
+    { type: 'string', maxLength: 0 },
+    { type: 'string', minLength: 1, pattern: '^https?://\\S+$' },
+    { type: 'string', minLength: 1, pattern: '^uploads/[\\w./%-]+$' },
+  ],
+} as const;
+
 const colorImageInputObject = {
   type: 'object',
   required: ['imageUrl'],
@@ -183,6 +199,7 @@ const colorImageInputObject = {
 
 const variantInputProperties = {
   size: { type: 'string', maxLength: 20, description: 'e.g. S, M, L, XL, 42' },
+  sizeChart: optionalMediaUrlInput,
   sku: { type: 'string', maxLength: 100, description: 'Stock-keeping unit — must be unique per product' },
   stock: { type: 'number', minimum: 0 },
   additionalPrice: { type: 'number', minimum: 0, description: 'Price delta added on top of the base product price' },
@@ -794,6 +811,18 @@ const productSummaryObject = {
     subCategoryId: { type: 'string', format: 'uuid', nullable: true },
     basePrice: { type: 'number' },
     discountPercent: { type: 'number' },
+    discountStartDate: {
+      type: 'string',
+      nullable: true,
+      format: 'date-time',
+      description: 'Discount valid from (ISO 8601). Null if no start bound.',
+    },
+    discountEndDate: {
+      type: 'string',
+      nullable: true,
+      format: 'date-time',
+      description: 'Discount valid until (ISO 8601). Null if no end bound.',
+    },
     finalPrice: { type: 'number' },
     isActive: { type: 'boolean' },
     inStock: { type: 'boolean' },
@@ -839,7 +868,8 @@ export const listProductsSchema: FastifySchema = {
       brands: {
         type: 'array',
         items: { type: 'string' },
-        description: 'Filter by brand name (exact match, multiple allowed)',
+        description:
+          'Filter by brand name (e.g. `brands=Nike`) or brand UUID. Single values are coerced to a one-element array.',
       },
       colors: {
         type: 'array',
@@ -1055,17 +1085,7 @@ export const publishProductSchema: FastifySchema = {
         data: { type: 'object', properties: { product: productObject } },
       },
     },
-    400: {
-      type: 'object',
-      description: 'Product is missing required fields for publishing',
-      properties: {
-        success: { type: 'boolean' },
-        error: {
-          type: 'object',
-          properties: { code: { type: 'string' }, message: { type: 'string' } },
-        },
-      },
-    },
+    400: validationErrorResponse,
     401: unauthorized,
     403: forbidden,
     404: notFound,

@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 const errorResponse = {
   type: 'object',
   properties: {
@@ -33,7 +35,7 @@ export const sendPhoneOtpSchema: FastifySchema = {
         data: { type: 'object', properties: { message: { type: 'string' } } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },
@@ -65,7 +67,7 @@ export const verifyPhoneOtpSchema: FastifySchema = {
         data: { type: 'object', properties: { verified: { type: 'boolean' } } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },
@@ -96,7 +98,7 @@ export const sendEmailOtpSchema: FastifySchema = {
         data: { type: 'object', properties: { message: { type: 'string' } } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },
@@ -128,7 +130,7 @@ export const verifyEmailOtpSchema: FastifySchema = {
         data: { type: 'object', properties: { verified: { type: 'boolean' } } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },

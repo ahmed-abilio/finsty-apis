@@ -30,3 +30,16 @@ export function getWorkerOptions(): Omit<WorkerOptions, 'connection'> & { connec
     },
   };
 }
+
+/** For scheduled jobs that may run longer than the default 30s BullMQ lock. */
+export function getScheduledJobWorkerOptions(): Omit<WorkerOptions, 'connection'> & {
+  connection: ReturnType<typeof createBullMQConnection>;
+} {
+  return {
+    ...getWorkerOptions(),
+    concurrency: 1,
+    lockDuration: 35 * 60 * 1000,
+    lockRenewTime: 5 * 60 * 1000,
+    stalledInterval: 2 * 60 * 1000,
+  };
+}

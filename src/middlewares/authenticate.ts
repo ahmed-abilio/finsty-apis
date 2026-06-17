@@ -1,6 +1,7 @@
 import fp from 'fastify-plugin';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { verifyAccessToken } from '@modules/auth/auth.service';
+import userService from '@modules/user/user.service';
 import { AppError } from '@utils/appError';
 import type { JwtPayload } from '@types-app/index';
 import { Roles } from '@modules/user/user.model';
@@ -25,6 +26,11 @@ declare module 'fastify' {
  *   OR as a route-level hook via fastify.addHook('onRequest', fastify.authenticate)
  */
 async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
+  async function assertAuthenticatedUser(payload: JwtPayload): Promise<JwtPayload> {
+    await userService.findByIdForRole(payload.sub, { role: payload.role as Roles });
+    return payload;
+  }
+
   fastify.decorate(
     'authenticate',
     async function authenticate(
@@ -37,9 +43,7 @@ async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
       }
       const token = authHeader.slice(7);
       const payload = verifyAccessToken(token);
-
-      // Attach decoded payload to request for downstream handlers
-      request.user = payload;
+      request.user = await assertAuthenticatedUser(payload);
     },
   );
 
@@ -52,7 +56,8 @@ async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
       const authHeader = request.headers.authorization;
       if (!authHeader || !authHeader.startsWith('Bearer ')) return;
       try {
-        request.user = verifyAccessToken(authHeader.slice(7));
+        const payload = verifyAccessToken(authHeader.slice(7));
+        request.user = await assertAuthenticatedUser(payload);
       } catch {
         // invalid token — treat as unauthenticated
       }

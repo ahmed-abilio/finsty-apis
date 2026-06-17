@@ -144,7 +144,7 @@ User.init(
   },
   {
     sequelize,
-    tableName: 'users',
+    tableName: 'user_users',
     underscored: false,
     indexes: [
       { fields: ['firebase_uid'], unique: true },

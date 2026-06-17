@@ -36,4 +36,5 @@ function initializeFirebase(): admin.app.App {
 const firebaseApp = initializeFirebase();
 
 export const firebaseAuth = firebaseApp.auth();
+export const firebaseMessaging = admin.messaging();
 export default firebaseApp;

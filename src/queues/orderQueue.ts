@@ -1,6 +1,9 @@
 import { Queue } from 'bullmq';
 import { getQueueOptions } from '@config/bullmq';
-import type { CreateOrderInput } from '@modules/order/order.service';
+import type { CreateOrderInput } from '@modules/order/order.checkout.types';
+import type { ShadowfaxReplaySnapshot } from '@modules/shadowfax/shadowfaxDelivery';
+
+export type { ShadowfaxReplaySnapshot } from '@modules/shadowfax/shadowfaxDelivery';
 
 // ─── Snapshot types (fully serialisable — stored in Redis) ───────────────────
 
@@ -14,9 +17,28 @@ export interface OrderItemSnapshot {
   variantId: string | null;
   productName: string;
   variantLabel: string | null;
+  /** Raw product base price (per unit, before discount and variant adjustment). */
+  basePrice: number;
+  /** Effective discount percent (0 when outside the discount window). */
+  discountPercent: number;
+  /** Per-unit savings when the discount window is active (list line base+additional minus unitPrice). */
+  discountAmount: number;
+  /** Per-unit base after the same discount percent applied to the catalogue base (variant extra discounted separately, same percent). */
+  discountedBasePrice: number;
+  /** Variant.additionalPrice per unit before discount (0 when the line has no variant). */
+  additionalPrice: number;
+  /** Final per-unit price: discounted base plus discounted variant additional. */
   unitPrice: number;
   quantity: number;
   totalPrice: number;
+  /** basePrice * quantity (true pre-discount, pre-variant total for this line). */
+  baseTotal: number;
+}
+
+export interface ResolvedCouponLine {
+  id: string;
+  code: string;
+  discountAmount: number;
 }
 
 /**
@@ -31,11 +53,14 @@ export interface OrderPricingSnapshot {
   orderItems: OrderItemSnapshot[];
   subtotal: number;
   taxAmount: number;
+  platformFee: number;
   deliveryCharge: number;
   totalAmount: number;
   discountAmount: number;
-  resolvedCouponCode: string | null;
-  resolvedCouponId: string | null;
+  /** Coupons applied at checkout; omit on older queued jobs (legacy `resolvedCouponId` / `resolvedCouponCode`). */
+  resolvedCoupons?: ResolvedCouponLine[];
+  /** Present when `deliveryType` is `delivery` — replayed at payment for Shadowfax validation. */
+  shadowfaxReplay: ShadowfaxReplaySnapshot | null;
 }
 
 // ─── Job payload types ────────────────────────────────────────────────────────

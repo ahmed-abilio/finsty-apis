@@ -77,6 +77,14 @@ class CartController {
     const cart = await cartService.clearCart(request.user.sub);
     void reply.status(200).send({ success: true, data: cart });
   }
+
+  async getDeliveryQuote(
+    request: FastifyRequest<{ Querystring: { addressId?: string } }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const quote = await cartService.getDeliveryQuote(request.user.sub, request.query.addressId);
+    void reply.status(200).send({ success: true, data: { deliveryQuote: quote } });
+  }
 }
 
 export default new CartController();

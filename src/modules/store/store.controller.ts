@@ -2,6 +2,7 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import storeService, { StoreSearchQuery, ProductSearchQuery, VendorApplicationData, CategoryExplorerQuery, VendorProductQuery } from './store.service';
 import type { StoreGender, StoreAttributes } from './store.model';
 import { AppError } from '@utils/appError';
+import { parseRevenueDateRange } from './vendorDashboard.utils';
 
 interface StoreParams {
   storeId: string;
@@ -40,6 +41,13 @@ interface ProductQuery {
 interface ApproveVendorBody {
   status: 'APPROVED' | 'REJECTED';
   remarks?: string;
+}
+
+interface VendorRevenueQuery {
+  from: string;
+  to: string;
+  page?: number;
+  limit?: number;
 }
 
 // ownerId is injected from the JWT — not present in the request body
@@ -168,6 +176,34 @@ class StoreController {
   ): Promise<void> {
     const result = await storeService.getMyProducts((request as any).user.sub, request.query);
     void reply.status(200).send({ success: true, data: result });
+  }
+
+  async getMyDashboard(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const data = await storeService.getVendorDashboard(request.user.sub);
+    void reply.status(200).send({ success: true, data });
+  }
+
+  async getMyRevenue(
+    request: FastifyRequest<{ Querystring: VendorRevenueQuery }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const { from, to, page, limit } = request.query;
+    if (!from || !to) {
+      throw AppError.badRequest('from and to are required ISO timestamps', 'INVALID_DATE_RANGE');
+    }
+    let range;
+    try {
+      range = parseRevenueDateRange(from, to);
+    } catch (err) {
+      const code = (err as Error).message === 'INVALID_RANGE' ? 'INVALID_DATE_RANGE' : 'INVALID_DATE';
+      const message =
+        (err as Error).message === 'INVALID_RANGE'
+          ? 'to must be greater than or equal to from'
+          : 'from and to must be valid ISO timestamps';
+      throw AppError.badRequest(message, code);
+    }
+    const data = await storeService.getVendorRevenue(request.user.sub, range, page, limit);
+    void reply.status(200).send({ success: true, data });
   }
 
   async getStoreAttributes(

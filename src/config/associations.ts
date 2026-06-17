@@ -29,6 +29,21 @@ import CouponUsage from '@modules/coupon/coupon-usage.model';
 import Brand from '@modules/brand/brand.model';
 import Category from '@modules/category/category.model';
 import SubCategory from '@modules/sub-category/sub-category.model';
+import ShadowfaxShipment from '@modules/shadowfax/shadowfax-shipment.model';
+import OrderStatusHistory from '@modules/shadowfax/tracking/order-status-history.model';
+import ShadowfaxWebhookEvent from '@modules/shadowfax/tracking/shadowfax-webhook-event.model';
+import OrderRiderLocation from '@modules/shadowfax/tracking/order-rider-location.model';
+import DeviceToken from '@modules/notification/device-token.model';
+import NotificationInbox from '@modules/notification/notification-inbox.model';
+import CmsPage from '@modules/cms/cms.model';
+
+// ─── User ↔ DeviceToken (push) ────────────────────────────────────────────────
+User.hasMany(DeviceToken, { foreignKey: 'userId', as: 'deviceTokens' });
+DeviceToken.belongsTo(User, { foreignKey: 'userId', as: 'user' });
+
+// ─── User ↔ Notification inbox ───────────────────────────────────────────────
+User.hasMany(NotificationInbox, { foreignKey: 'userId', as: 'notifications' });
+NotificationInbox.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
 // ─── User ↔ Address ───────────────────────────────────────────────────────────
 User.hasMany(Address, { foreignKey: 'userId', as: 'addresses' });
@@ -103,6 +118,16 @@ OrderItem.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
 // ─── Order ↔ Address ──────────────────────────────────────────────────────────
 Order.belongsTo(Address, { foreignKey: 'addressId', as: 'address' });
 
+// ─── Order ↔ ShadowfaxShipment ───────────────────────────────────────────────
+Order.hasOne(ShadowfaxShipment, { foreignKey: 'orderId', as: 'shadowfaxShipment' });
+ShadowfaxShipment.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
+
+Order.hasMany(OrderStatusHistory, { foreignKey: 'orderId', as: 'statusHistory' });
+OrderStatusHistory.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
+
+Order.hasMany(OrderRiderLocation, { foreignKey: 'orderId', as: 'riderLocations' });
+OrderRiderLocation.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
+
 // ─── OrderItem ↔ Product / ProductVariant ────────────────────────────────────
 OrderItem.belongsTo(Product, { foreignKey: 'productId', as: 'product' });
 OrderItem.belongsTo(ProductVariant, { foreignKey: 'variantId', as: 'variant' });
@@ -158,7 +183,7 @@ User.hasMany(CouponUsage, { foreignKey: 'userId', as: 'couponUsages' });
 CouponUsage.belongsTo(User, { foreignKey: 'userId', as: 'user' });
 
 // ─── Order ↔ CouponUsage ──────────────────────────────────────────────────────
-Order.hasOne(CouponUsage, { foreignKey: 'orderId', as: 'couponUsage' });
+Order.hasMany(CouponUsage, { foreignKey: 'orderId', as: 'couponUsages' });
 CouponUsage.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
 
 // ─── Coupon ↔ Store / Category (optional FK) ─────────────────────────────────
@@ -192,4 +217,11 @@ export {
   Payment,
   Coupon,
   CouponUsage,
+  ShadowfaxShipment,
+  OrderStatusHistory,
+  ShadowfaxWebhookEvent,
+  OrderRiderLocation,
+  DeviceToken,
+  NotificationInbox,
+  CmsPage,
 };

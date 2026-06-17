@@ -3,8 +3,16 @@ import * as authService from './auth.service';
 import userService from '../user/user.service';
 import storeService from '../store/store.service';
 import { RefreshTokenBody } from './auth.schema';
+import { NotificationType } from '@modules/notification/notification.types';
+import { notifyAdmin, notifyUser, notifyVendor } from '@modules/notification/notification.service';
+import {
+  assertDeviceTokenPayloadValid,
+  registerDeviceTokenFromAuth,
+  type DeviceTokenAuthInput,
+} from '@modules/notification/device-token-registration';
+import { Roles } from '@modules/user/user.model';
 
-interface IdTokenBody {
+interface IdTokenBody extends DeviceTokenAuthInput {
   idToken: string;
   referralCode?: string;
 }
@@ -13,10 +21,15 @@ interface SendOtpBody {
   phone: string;
 }
 
-interface VerifyOtpBody {
+interface VerifyOtpBody extends DeviceTokenAuthInput {
   phone: string;
   otp: string;
   referralCode?: string;
+}
+
+interface RoleVerifyOtpBody extends DeviceTokenAuthInput {
+  phone: string;
+  otp: string;
 }
 
 class AuthController {
@@ -32,12 +45,15 @@ class AuthController {
     request: FastifyRequest<{ Body: VerifyOtpBody }>,
     reply: FastifyReply,
   ): Promise<void> {
+    assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.verifyOtp(
       request.body.phone,
       request.body.otp,
       request.ip,
       request.body.referralCode ?? null,
     );
+    await registerDeviceTokenFromAuth(user.id, Roles.USER, request.body);
+    notifyUser(user.id, NotificationType.LOGIN_SUCCESS);
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {
@@ -58,9 +74,10 @@ class AuthController {
   }
 
   async adminVerifyOtp(
-    request: FastifyRequest<{ Body: Omit<VerifyOtpBody, 'referralCode'> }>,
+    request: FastifyRequest<{ Body: RoleVerifyOtpBody }>,
     reply: FastifyReply,
   ): Promise<void> {
+    assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.verifyOtp(
       request.body.phone,
       request.body.otp,
@@ -68,6 +85,8 @@ class AuthController {
       null,
       'admin',
     );
+    await registerDeviceTokenFromAuth(user.id, Roles.ADMIN, request.body);
+    notifyAdmin(user.id, NotificationType.LOGIN_SUCCESS);
     void reply.status(200).send({
       success: true,
       data: {
@@ -88,9 +107,10 @@ class AuthController {
   }
 
   async vendorVerifyOtp(
-    request: FastifyRequest<{ Body: Omit<VerifyOtpBody, 'referralCode'> }>,
+    request: FastifyRequest<{ Body: RoleVerifyOtpBody }>,
     reply: FastifyReply,
   ): Promise<void> {
+    assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.verifyOtp(
       request.body.phone,
       request.body.otp,
@@ -112,6 +132,11 @@ class AuthController {
       ? (store.isActive ?? (store as any).dataValues?.is_active ?? false)
       : false;
 
+    if (userId) {
+      await registerDeviceTokenFromAuth(userId, Roles.VENDOR, request.body);
+      notifyVendor(userId, NotificationType.LOGIN_SUCCESS);
+    }
+
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {
@@ -129,7 +154,9 @@ class AuthController {
     request: FastifyRequest<{ Body: IdTokenBody }>,
     reply: FastifyReply,
   ): Promise<void> {
+    assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.googleSignIn(request.body.idToken, request.ip, request.body.referralCode ?? null);
+    await registerDeviceTokenFromAuth(user.id, Roles.USER, request.body);
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {
@@ -145,7 +172,9 @@ class AuthController {
     request: FastifyRequest<{ Body: IdTokenBody }>,
     reply: FastifyReply,
   ): Promise<void> {
+    assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.appleSignIn(request.body.idToken, request.ip, request.body.referralCode ?? null);
+    await registerDeviceTokenFromAuth(user.id, Roles.USER, request.body);
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {
@@ -161,13 +190,15 @@ class AuthController {
     request: FastifyRequest<{ Body: RefreshTokenBody }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const tokens = await authService.refreshAccessToken(request.body.refreshToken);
-    void reply.status(200).send({ 
-      success: true, 
-      data: { 
+    assertDeviceTokenPayloadValid(request.body);
+    const { tokens, userId, role } = await authService.refreshAccessToken(request.body.refreshToken);
+    await registerDeviceTokenFromAuth(userId, role, request.body);
+    void reply.status(200).send({
+      success: true,
+      data: {
         accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken 
-      } 
+        refreshToken: tokens.refreshToken,
+      },
     });
   }
 

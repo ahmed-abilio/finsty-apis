@@ -8,6 +8,7 @@ import {
   listCouponsSchema,
   adminListCouponsSchema,
   vendorListCouponsSchema,
+  vendorCouponStatsSchema,
   toggleReadyToUseSchema,
 } from './coupon.schema';
 import { Roles } from '@modules/user/user.model';
@@ -33,14 +34,14 @@ export async function couponRoutes(fastify: FastifyInstance): Promise<void> {
     couponController.create.bind(couponController),
   );
 
-  // PATCH /coupons/:couponId/toggle — vendor toggles their own coupon active/inactive
-  fastify.patch<{ Params: { couponId: string } }>(
-    '/:couponId/toggle',
+  // GET /coupons/my-stats — vendor coupon aggregates (before /:couponId routes)
+  fastify.get<{ Querystring: { from?: string; to?: string } }>(
+    '/my-stats',
     {
-      schema: toggleCouponSchema,
+      schema: vendorCouponStatsSchema,
       onRequest: [fastify.requireRole(Roles.VENDOR)],
     },
-    couponController.vendorToggleActive.bind(couponController),
+    couponController.getVendorCouponStats.bind(couponController),
   );
 
   // GET /coupons/my-coupons — vendor lists all their store's coupons
@@ -51,6 +52,16 @@ export async function couponRoutes(fastify: FastifyInstance): Promise<void> {
       onRequest: [fastify.requireRole(Roles.VENDOR)],
     },
     couponController.getVendorCoupons.bind(couponController),
+  );
+
+  // PATCH /coupons/:couponId/toggle — vendor toggles their own coupon active/inactive
+  fastify.patch<{ Params: { couponId: string } }>(
+    '/:couponId/toggle',
+    {
+      schema: toggleCouponSchema,
+      onRequest: [fastify.requireRole(Roles.VENDOR)],
+    },
+    couponController.vendorToggleActive.bind(couponController),
   );
 }
 

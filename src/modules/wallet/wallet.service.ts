@@ -3,6 +3,8 @@ import sequelize from '@config/database';
 import Wallet from './wallet.model';
 import WalletTransaction from './wallet-transaction.model';
 import { AppError } from '@utils/appError';
+import { NotificationType } from '@modules/notification/notification.types';
+import { notifyUser, walletCreditNotificationType } from '@modules/notification/notification.service';
 import { paymentProvider } from '@utils/paymentProvider';
 import type { TransactionSource } from './wallet-transaction.model';
 
@@ -193,6 +195,7 @@ class WalletService {
       );
 
       await t.commit();
+      notifyUser(userId, NotificationType.WALLET_CREDITED, { amount: Number(tx.amount) });
       return tx.toPublicJSON();
     } catch (err) {
       await t.rollback();
@@ -249,6 +252,7 @@ class WalletService {
       );
 
       await t.commit();
+      notifyUser(userId, NotificationType.WALLET_DEBITED, { amount: input.amount });
       return tx.toPublicJSON();
     } catch (err) {
       await t.rollback();
@@ -301,6 +305,11 @@ class WalletService {
       );
 
       await t.commit();
+      notifyUser(
+        input.userId,
+        walletCreditNotificationType('refund'),
+        { amount: input.amount },
+      );
       return tx.toPublicJSON();
     } catch (err) {
       await t.rollback();

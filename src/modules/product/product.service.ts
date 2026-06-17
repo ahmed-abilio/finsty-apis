@@ -3,6 +3,8 @@ import { getStoreIdsWithinRadius, GEOFENCE_RADIUS_KM } from '@utils/geo';
 import sequelize from '@config/database';
 import { generateUniqueSlug } from '@utils/slugify';
 import Product from './product.model';
+import { maybeNotifyVendorStockChange } from '@modules/notification/notification.stock';
+import { syncProductStockFromVariants } from './productStock.util';
 import ProductColor from './product-color.model';
 import ProductColorImage from './product-color-image.model';
 import ProductVariant from './product-variant.model';
@@ -11,6 +13,7 @@ import Store from '@modules/store/store.model';
 import Category from '@modules/category/category.model';
 import SubCategory from '@modules/sub-category/sub-category.model';
 import { AppError } from '@utils/appError';
+import { buildS3PublicUrl } from '@utils/s3Uploader';
 import brandService from '@modules/brand/brand.service';
 import type { StoreGender } from '@modules/store/store.model';
 import { Brand, Wishlist } from '@config/associations';
@@ -25,10 +28,29 @@ export type ProductSortBy =
   | 'discount_desc'
   | 'relevance';
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function normalizeStringList(value: string | string[] | undefined): string[] {
+  if (value === undefined || value === null) return [];
+  const list = Array.isArray(value) ? value : [value];
+  return list.map((v) => String(v).trim()).filter(Boolean);
+}
+
+function normalizeSizeChartUrl(value?: string | null): string | null {
+  if (value == null) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+  if (trimmed.startsWith('uploads/')) return buildS3PublicUrl(trimmed);
+  return trimmed;
+}
+
 export interface ListProductsInput {
   storeIds?: string[];
   categoryIds?: string[];
-  brands?: string[];      // filter by brand name (exact match, case-insensitive handled at DB via index)
+  /** Brand display names (e.g. Nike) or brand UUIDs — matched via the brands table. */
+  brands?: string | string[];
   minPrice?: number;
   maxPrice?: number;
   genders?: StoreGender[];
@@ -65,6 +87,7 @@ export interface ColorImageInput {
 
 export interface VariantInput {
   size?: string;
+  sizeChart?: string;
   sku?: string;
   stock?: number;
   additionalPrice?: number;
@@ -130,6 +153,7 @@ export interface UpdateColorInput {
 
 export interface UpdateVariantInput {
   size?: string;
+  sizeChart?: string;
   sku?: string;
   stock?: number;
   additionalPrice?: number;
@@ -253,9 +277,15 @@ class ProductService {
     if (input.genders?.length) {
       (where as any).gender = { [Op.in]: input.genders };
     }
-    if (input.brands?.length) {
-      (where as any).brand = { [Op.in]: input.brands };
+
+    const brandTokens = normalizeStringList(input.brands);
+    const brandIds = brandTokens.filter((t) => UUID_REGEX.test(t));
+    const brandNames = brandTokens.filter((t) => !UUID_REGEX.test(t));
+
+    if (brandIds.length) {
+      (where as any).brand = { [Op.in]: brandIds };
     }
+
     if (input.minRating !== undefined) {
       (where as any).averageRating = { [Op.gte]: input.minRating };
     }
@@ -287,13 +317,25 @@ class ProductService {
           }
         : { model: ProductColor, as: 'colors', required: false, attributes: [] };
 
+    const brandInclude =
+      brandNames.length > 0
+        ? {
+            model: Brand,
+            as: 'brandDetail',
+            required: true,
+            where: {
+              [Op.or]: brandNames.map((name) => ({ name: { [Op.iLike]: name } })),
+            },
+          }
+        : { model: Brand, as: 'brandDetail', required: false };
+
     // ── Size filter (INNER JOIN on ProductVariant when sizes specified) ───────
     const includes: any[] = [
       colorInclude,
       { model: ProductImage, as: 'images' },
       { model: Category, as: 'category' },
       { model: SubCategory, as: 'subCategory' },
-      { model: Brand, as: 'brandDetail' },
+      brandInclude,
     ];
 
     if (input.sizes?.length) {
@@ -376,12 +418,12 @@ class ProductService {
       }
     }
 
-    // Validate brand belongs to this store's brand list (if store has brands configured)
+    // Validate brand belongs to this store (by UUID lookup in the brands table)
     if (input.brand) {
-      const store = await Store.findByPk(storeId, { attributes: ['brands'] });
-      if (store && store.brands.length > 0 && !store.brands.includes(input.brand)) {
+      const brand = await Brand.findOne({ where: { id: input.brand, storeId } });
+      if (!brand) {
         throw AppError.badRequest(
-          `Brand "${input.brand}" is not in your store's brand list. Add it to your store first.`,
+          `Brand not found in your store's brand list. Add it to your store first.`,
           'INVALID_BRAND',
         );
       }
@@ -473,6 +515,7 @@ class ProductService {
                 productId,
                 colorId: color.get('id'),
                 size: v.size ?? null,
+                sizeChart: normalizeSizeChartUrl(v.sizeChart),
                 sku: v.sku || null, // Ensure empty strings are handled as NULL to avoid unique constraint issues
                 stock: v.stock ?? 0,
                 additionalPrice: v.additionalPrice ?? 0,
@@ -485,6 +528,8 @@ class ProductService {
           colors.push(serializeColor(color, colorImages, variants));
         }
       }
+
+      await syncProductStockFromVariants(productId, t);
 
       return {
         ...product.toPublicJSON(),
@@ -506,12 +551,12 @@ class ProductService {
     await assertStoreOwnership(product.storeId, requesterId, isAdmin);
     await assertCategoryRefs(input.categoryId, input.subCategoryId);
 
-    // Validate brand if being changed
-    if (input.brand !== undefined && input.brand !== null) {
-      const store = await Store.findByPk(product.storeId, { attributes: ['brands'] });
-      if (store && store.brands.length > 0 && !store.brands.includes(input.brand)) {
+    // Validate brand belongs to this store (by UUID lookup in the brands table)
+    if (input.brand !== undefined && input.brand !== null && input.brand !== '') {
+      const brand = await Brand.findOne({ where: { id: input.brand, storeId: product.storeId } });
+      if (!brand) {
         throw AppError.badRequest(
-          `Brand "${input.brand}" is not in your store's brand list. Add it to your store first.`,
+          `Brand not found in your store's brand list. Add it to your store first.`,
           'INVALID_BRAND',
         );
       }
@@ -567,12 +612,12 @@ class ProductService {
       }
     }
 
-    // Validate brand
+    // Validate brand belongs to this store (by UUID lookup in the brands table)
     if (input.brand) {
-      const store = await Store.findByPk(product.storeId, { attributes: ['brands'] });
-      if (store && store.brands.length > 0 && !store.brands.includes(input.brand)) {
+      const brand = await Brand.findOne({ where: { id: input.brand, storeId: product.storeId } });
+      if (!brand) {
         throw AppError.badRequest(
-          `Brand "${input.brand}" is not in your store's brand list.`,
+          `Brand not found in your store's brand list. Add it to your store first.`,
           'INVALID_BRAND',
         );
       }
@@ -654,6 +699,7 @@ class ProductService {
                 productId,
                 colorId: color.get('id'),
                 size: v.size ?? null,
+                sizeChart: normalizeSizeChartUrl(v.sizeChart),
                 sku: v.sku || null, // Ensure empty strings are handled as NULL to avoid unique constraint issues
                 stock: v.stock ?? 0,
                 additionalPrice: v.additionalPrice ?? 0,
@@ -663,6 +709,8 @@ class ProductService {
           }
         }
       }
+
+      await syncProductStockFromVariants(productId, t);
 
       // Re-fetch the fully updated product within the same transaction
       // so the response reflects the committed data.
@@ -713,7 +761,9 @@ class ProductService {
 
     await assertStoreOwnership(product.storeId, requesterId, isAdmin);
 
-    if (hard && isAdmin) {
+    // Draft products are always hard-deleted since they were never published
+    // and soft-delete (isActive=false) is a no-op for them.
+    if ((hard && isAdmin) || product.status === 'draft') {
       await product.destroy();
     } else {
       await product.update({ isActive: false });
@@ -831,7 +881,7 @@ class ProductService {
 
   async publish(productId: string, requesterId: string, isAdmin: boolean) {
     const product = await Product.findByPk(productId);
-    if (!product || !product.isActive) throw AppError.notFound('Product not found', 'PRODUCT_NOT_FOUND');
+    if (!product) throw AppError.notFound('Product not found', 'PRODUCT_NOT_FOUND');
 
     await assertStoreOwnership(product.storeId, requesterId, isAdmin);
 
@@ -845,7 +895,7 @@ class ProductService {
       throw AppError.badRequest('Product must have a valid base price before it can be published', 'PUBLISH_MISSING_BASE_PRICE');
     }
 
-    await product.update({ status: 'active' });
+    await product.update({ status: 'active', isActive: true });
     return this.findById(productId);
   }
 
@@ -939,6 +989,7 @@ class ProductService {
             productId,
             colorId: color.get('id') as string,
             size: v.size ?? null,
+            sizeChart: normalizeSizeChartUrl(v.sizeChart),
             sku: v.sku ?? null,
             stock: v.stock ?? 0,
             additionalPrice: v.additionalPrice ?? 0,
@@ -947,6 +998,8 @@ class ProductService {
         );
         variants.push(...created);
       }
+
+      await syncProductStockFromVariants(productId, t);
 
       return serializeColor(color, colorImages, variants);
     });
@@ -1067,10 +1120,13 @@ class ProductService {
       productId,
       colorId,
       size: input.size ?? null,
+      sizeChart: normalizeSizeChartUrl(input.sizeChart),
       sku: input.sku ?? null,
       stock: input.stock ?? 0,
       additionalPrice: input.additionalPrice ?? 0,
     });
+
+    await syncProductStockFromVariants(productId);
 
     return variant.toPublicJSON();
   }
@@ -1099,7 +1155,19 @@ class ProductService {
       if (conflict) throw AppError.conflict('SKU already exists for this product', 'SKU_CONFLICT');
     }
 
-    await variant.update(input);
+    const previousStock = variant.stock;
+    const updatePayload = {
+      ...input,
+      ...(input.sizeChart !== undefined ? { sizeChart: normalizeSizeChartUrl(input.sizeChart) } : {}),
+    };
+    await variant.update(updatePayload);
+
+    await syncProductStockFromVariants(productId);
+
+    if (input.stock !== undefined && input.stock !== previousStock) {
+      await maybeNotifyVendorStockChange(product, previousStock, input.stock);
+    }
+
     return variant.toPublicJSON();
   }
 
@@ -1122,6 +1190,7 @@ class ProductService {
     if (!variant) throw AppError.notFound('Variant not found', 'VARIANT_NOT_FOUND');
 
     await variant.destroy();
+    await syncProductStockFromVariants(productId);
   }
 
   // ── Product-level image management ────────────────────────────────────────

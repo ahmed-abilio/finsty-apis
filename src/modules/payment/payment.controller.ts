@@ -28,6 +28,17 @@ class PaymentController {
     void reply.status(200).send({ success: true, data: result });
   }
 
+  async cancelIncompletePayment(
+    request: FastifyRequest<{ Body: { orderId: string } }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const result = await paymentService.cancelIncompletePayment(
+      request.user.sub,
+      request.body.orderId,
+    );
+    void reply.status(200).send({ success: true, data: result });
+  }
+
   async requestRefund(
     request: FastifyRequest<{ Params: PaymentParams; Body: { reason?: string } }>,
     reply: FastifyReply,

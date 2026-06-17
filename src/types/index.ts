@@ -2,7 +2,16 @@ export type AuthProvider = 'phone' | 'google' | 'apple';
 
 export type StoreGender = 'men' | 'women' | 'kids' | 'unisex';
 export type StoreCategoryType = 'clothing' | 'footwear' | 'accessories';
-export type OrderStatus = 'pending' | 'confirmed' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
+export type OrderStatus =
+  | 'pending'
+  | 'confirmed'
+  | 'rider_assigned'
+  | 'at_store'
+  | 'picked_up'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'cancelled'
+  | 'returned';
 export type DeliveryType = 'delivery' | 'pickup';
 
 export interface JwtPayload {

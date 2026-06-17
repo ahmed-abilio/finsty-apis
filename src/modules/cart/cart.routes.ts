@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import cartController from './cart.controller';
 import {
   getCartSchema,
+  getCartDeliveryQuoteSchema,
   addCartItemSchema,
   updateCartItemSchema,
   removeCartItemSchema,
@@ -13,6 +14,12 @@ export default async function cartRoutes(fastify: FastifyInstance): Promise<void
   fastify.addHook('onRequest', fastify.authenticate);
 
   fastify.get('/', { schema: getCartSchema }, cartController.getCart.bind(cartController));
+
+  fastify.get(
+    '/delivery-quote',
+    { schema: getCartDeliveryQuoteSchema },
+    cartController.getDeliveryQuote.bind(cartController),
+  );
 
   fastify.post('/items', { schema: addCartItemSchema }, cartController.addItem.bind(cartController));
 

@@ -1,4 +1,4 @@
-import { Op } from 'sequelize';
+import { Op, Transaction } from 'sequelize';
 import sequelize from '@config/database';
 import Order from './order.model';
 import OrderItem from './order-item.model';
@@ -12,36 +12,91 @@ import PendingOrder from './pending-order.model';
 import Product from '@modules/product/product.model';
 import ProductImage from '@modules/product/product-image.model';
 import ProductVariant from '@modules/product/product-variant.model';
+import { syncProductStockFromVariants } from '@modules/product/productStock.util';
 import ProductColor from '@modules/product/product-color.model';
 import ProductColorImage from '@modules/product/product-color-image.model';
 import ProductReview from '@modules/product/product-review.model';
+import ProductReviewImage from '@modules/product/product-review-image.model';
 import Store from '@modules/store/store.model';
 import Payment from '@modules/payment/payment.model';
 
 import cartService from '@modules/cart/cart.service';
-import { addCreateOrderJob, OrderItemSnapshot, OrderPricingSnapshot } from '@queues/orderQueue';
+import {
+  addCreateOrderJob,
+  OrderItemSnapshot,
+  OrderPricingSnapshot,
+  type ResolvedCouponLine,
+} from '@queues/orderQueue';
 import { AppError } from '@utils/appError';
 import logger from '@utils/logger';
-import type { DeliveryType, OrderStatus } from './order.model';
+import { getPublicDeliveryConfig, resolveDeliveryWaivedReason } from '@config/delivery.config';
+import { resolveDeliveryQuote } from '@modules/delivery/deliveryQuote.service';
+import addressService from '@modules/address/address.service';
+import { buildShadowfaxReplayFromSubtotal } from '@modules/shadowfax/shadowfaxDelivery';
+import { scheduleShadowfaxPlacementIfDelivery } from '@modules/shadowfax/shadowfaxPlacement.service';
+import { getOrderDeliveryStatus } from './orderDeliveryStatus.service';
+import { buildWalletPaidByOrderIds, resolveWalletAmountPaid } from './orderWalletPaid';
+import { buildShadowfaxOrderIdByOrderIds, resolveShadowfaxOrderId } from './orderShadowfax';
+import { buildOrderRefWhere } from './orderRef';
+import { normalizeOrderStatusInput } from './order-status.constants';
+import { transitionOrderStatus } from '@modules/shadowfax/tracking/order-status-transition.service';
+import { publishOrderStatusChanged } from '@modules/shadowfax/tracking/order-status.publisher';
+import type { ShadowfaxOrderStatusData } from '@modules/shadowfax/shadowfaxOrderStatus.types';
+import { computeTaxOnSubtotal, getPlatformFee } from '@config/pricing.config';
+import { VENDOR_SALES_ORDER_STATUSES, type DateRange } from '@modules/store/vendorDashboard.utils';
+import type { CouponValidationContext } from '@modules/coupon/coupon.service';
+import type { OrderStatus } from './order.model';
+import type { CreateOrderInput } from './order.checkout.types';
+import { NotificationType } from '@modules/notification/notification.types';
+import { notifyUser } from '@modules/notification/notification.service';
+import {
+  notifyBuyerOrderStatus,
+  notifyOrderPlacedAfterPayment,
+  notifyPaymentCancelled,
+} from '@modules/notification/notification.order';
+import { failPendingPaymentsForOrder } from '@modules/payment/payment.service';
 
-const TAX_RATE = 0.18;           // 18% GST
-const DELIVERY_CHARGE = 49;      // flat ₹49 delivery fee
-const FREE_DELIVERY_ABOVE = 499; // free delivery above ₹499 subtotal
+export type { CreateOrderInput } from './order.checkout.types';
 
 const REFERRAL_REWARD_AMOUNT = parseFloat(process.env.REFERRAL_REWARD_AMOUNT ?? '100');
 
-export interface CreateOrderInput {
-  addressId?: string;
-  deliveryType: DeliveryType;
-  notes?: string;
-  couponCode?: string;
-  autoApply?: boolean;
-}
+export type OrderLineItemMyReview = {
+  id: string;
+  rating: number;
+  comment: string | null;
+  createdAt: string | null;
+  images: Array<ReturnType<ProductReviewImage['toPublicJSON']>>;
+};
 
 export interface EnqueuedOrderResult {
   /** Use this ID to poll GET /orders/status/:jobId */
   jobId: string;
   message: string;
+}
+
+function buildCouponValidationContext(
+  userId: string,
+  subtotal: number,
+  isFirstOrder: boolean,
+  formatted: { items: unknown[] },
+): CouponValidationContext {
+  const items = formatted.items as Array<{
+    productId: string;
+    product?: { storeId?: string; categoryId?: string | null; subCategoryId?: string | null };
+  }>;
+  const storeIds = [...new Set(items.map((i) => i.product?.storeId).filter(Boolean))] as string[];
+  const storeId = storeIds.length === 1 ? storeIds[0]! : null;
+  const cartProductIds = [...new Set(items.map((i) => i.productId))];
+  const cartCategoryIds = [
+    ...new Set(
+      items.flatMap((i) => {
+        const p = i.product;
+        if (!p) return [];
+        return [p.categoryId, p.subCategoryId].filter((x): x is string => Boolean(x));
+      }),
+    ),
+  ];
+  return { userId, subtotal, isFirstOrder, storeId, cartProductIds, cartCategoryIds };
 }
 
 class OrderService {
@@ -54,13 +109,31 @@ class OrderService {
    * Target response time: < 50 ms regardless of server load.
    */
   async createFromCart(userId: string, input: CreateOrderInput): Promise<EnqueuedOrderResult> {
-    const { addressId, deliveryType, couponCode, autoApply } = input;
+    const { addressId, deliveryType, couponCode, couponCodes, autoApply } = input;
 
-    // ── Fast validation 1: address ───────────────────────────────────────────
+    let address: Address | null = null;
+
+    // ── Fast validation 1: address (explicit id or user's default) ─────────
     if (deliveryType === 'delivery') {
-      if (!addressId) throw AppError.badRequest('Address is required for delivery orders', 'ADDRESS_REQUIRED');
-      const address = await Address.findOne({ where: { id: addressId, userId } });
-      if (!address) throw AppError.notFound('Address not found', 'ADDRESS_NOT_FOUND');
+      if (addressId) {
+        const addr = await Address.findOne({ where: { id: addressId, userId } });
+        if (!addr) throw AppError.notFound('Address not found', 'ADDRESS_NOT_FOUND');
+        address = addr;
+      } else {
+        address = await addressService.getDefaultAddress(userId);
+        if (!address) {
+          throw AppError.badRequest(
+            'Delivery address is required — set a default address or pass addressId',
+            'ADDRESS_REQUIRED',
+          );
+        }
+      }
+      if (address.latitude === null || address.longitude === null) {
+        throw AppError.badRequest(
+          'Address must include latitude and longitude for delivery',
+          'ADDRESS_COORDINATES_REQUIRED',
+        );
+      }
     }
 
     // ── Fast validation 2: cart ──────────────────────────────────────────────
@@ -74,47 +147,96 @@ class OrderService {
     const completedOrderCount = await Order.count({ where: { userId, status: 'delivered' } });
     const isFirstOrder = completedOrderCount === 0;
 
-    // ── Coupon resolution ────────────────────────────────────────────────────
+    const couponCtx = buildCouponValidationContext(userId, subtotal, isFirstOrder, formatted);
+
     let discountAmount = 0;
-    let resolvedCouponCode: string | null = null;
     let deliveryChargeOverride: number | null = null;
-    let resolvedCouponId: string | null = null;
+    let resolvedCoupons: ResolvedCouponLine[] = [];
 
-    const resolveDiscount = async (code: string) => {
-      const result = await couponService.validate(code, { userId, subtotal, isFirstOrder });
-      if (result.coupon.type === 'FREE_DELIVERY') {
-        deliveryChargeOverride = 0;
-      } else {
-        discountAmount = result.discountAmount;
-      }
-      resolvedCouponCode = result.coupon.code;
-      return result.coupon;
-    };
+    const codesInput =
+      couponCodes && couponCodes.length > 0 ? couponCodes : couponCode ? [couponCode] : [];
 
-    if (couponCode) {
-      const coupon = await resolveDiscount(couponCode);
-      resolvedCouponId = coupon.id;
+    if (codesInput.length > 0) {
+      const stack = await couponService.validateStack(codesInput, couponCtx);
+      discountAmount = stack.totalDiscount;
+      if (stack.deliveryWaived) deliveryChargeOverride = 0;
+      resolvedCoupons = stack.applied.map((a) => ({
+        id: a.coupon.id,
+        code: a.coupon.code,
+        discountAmount: a.discountAmount,
+      }));
     } else if (autoApply) {
-      const best = await couponService.autoApplyBest({ userId, subtotal, isFirstOrder });
+      const best = await couponService.autoApplyBest(couponCtx);
       if (best) {
         if (best.coupon.type === 'FREE_DELIVERY') {
           deliveryChargeOverride = 0;
         } else {
           discountAmount = best.discountAmount;
         }
-        resolvedCouponCode = best.coupon.code;
-        resolvedCouponId = best.coupon.id;
+        resolvedCoupons = [
+          {
+            id: best.coupon.id,
+            code: best.coupon.code,
+            discountAmount: best.discountAmount,
+          },
+        ];
       }
     }
 
     // ── Price computation ────────────────────────────────────────────────────
-    const taxAmount = parseFloat((subtotal * TAX_RATE).toFixed(2));
-    const rawDeliveryCharge =
-      deliveryType === 'delivery' && subtotal < FREE_DELIVERY_ABOVE ? DELIVERY_CHARGE : 0;
-    const deliveryCharge =
-      deliveryChargeOverride !== null ? deliveryChargeOverride : rawDeliveryCharge;
+    const taxAmount = computeTaxOnSubtotal(subtotal);
+    const platformFee = getPlatformFee();
+    const waivedByCoupon = deliveryChargeOverride === 0;
+    const deliveryFeeWaived = deliveryType === 'pickup' || waivedByCoupon;
+
+    const shadowfaxReplay =
+      deliveryType === 'delivery' ? buildShadowfaxReplayFromSubtotal(subtotal, 'true') : null;
+
+    let deliveryCharge = 0;
+    let quotedDeliveryCharge: number | null = null;
+
+    if (deliveryType === 'delivery') {
+      const firstItem = formatted.items[0] as { product?: { storeId?: string } } | undefined;
+      const storeId = firstItem?.product?.storeId;
+      if (!storeId) {
+        throw AppError.badRequest('Could not resolve store for delivery quote', 'STORE_NOT_FOUND');
+      }
+
+      const deliveryQuote = await resolveDeliveryQuote({
+        userId,
+        subtotal,
+        storeId,
+        addressId: (address as Address).id,
+        deliveryWaivedByCoupon: waivedByCoupon,
+        cartId: cart.id,
+      });
+
+      quotedDeliveryCharge = deliveryQuote.quotedDeliveryCharge;
+      deliveryCharge = deliveryQuote.deliveryChargeApplied;
+
+      const clientFeeRaw = input.deliveryCharge;
+      if (clientFeeRaw !== undefined && clientFeeRaw !== null && !Number.isNaN(Number(clientFeeRaw))) {
+        const clientFee = Number(clientFeeRaw);
+        if (clientFee < 0) {
+          throw AppError.badRequest('deliveryCharge cannot be negative', 'DELIVERY_CHARGE_INVALID');
+        }
+        if (Math.abs(clientFee - deliveryCharge) > 0.01) {
+          throw AppError.badRequest(
+            'deliveryCharge does not match live delivery quote',
+            'DELIVERY_CHARGE_MISMATCH',
+            {
+              clientDeliveryCharge: clientFee,
+              expectedDeliveryCharge: deliveryCharge,
+              quotedDeliveryCharge,
+              deliveryFeeWaived,
+            },
+          );
+        }
+      }
+    }
+
     const totalAmount = parseFloat(
-      Math.max(0, subtotal + taxAmount + deliveryCharge - discountAmount).toFixed(2),
+      Math.max(0, subtotal + taxAmount + platformFee + deliveryCharge - discountAmount).toFixed(2),
     );
 
     // ── Build order-item snapshots (prices locked at this moment) ─────────────
@@ -123,9 +245,15 @@ class OrderService {
       variantId: item.variantId ?? null,
       productName: (item.product as { name: string }).name,
       variantLabel: item.variant ? (item.variant as { label: string }).label : null,
+      basePrice: item.basePrice,
+      discountPercent: item.discountPercent,
+      discountAmount: item.discountAmount,
+      discountedBasePrice: item.discountedBasePrice,
+      additionalPrice: item.additionalPrice,
       unitPrice: item.unitPrice,
       quantity: item.quantity,
       totalPrice: item.itemTotal,
+      baseTotal: item.baseTotal,
     }));
 
     // Capture the exact cart-item IDs so the worker deletes only these rows
@@ -138,21 +266,35 @@ class OrderService {
       orderItems,
       subtotal,
       taxAmount,
+      platformFee,
       deliveryCharge,
       totalAmount,
       discountAmount,
-      resolvedCouponCode,
-      resolvedCouponId,
+      resolvedCoupons,
+      shadowfaxReplay,
     };
 
     // ── Create the PendingOrder tracking record ──────────────────────────────
     const pending = await PendingOrder.create({ userId, status: 'queued' });
 
-    // ── Enqueue the job ───────────────────────────────────────────────────────
-    const bullJobId = await addCreateOrderJob(userId, input, pending.id, pricing);
+    // ── Enqueue the job (persist resolved default address on delivery orders) ─
+    const jobInput =
+      deliveryType === 'delivery' && address
+        ? { ...input, addressId: (address as Address).id }
+        : input;
+    const bullJobId = await addCreateOrderJob(userId, jobInput, pending.id, pricing);
 
     // Store the BullMQ job ID for debugging / Bull Board visibility
     await pending.update({ jobId: bullJobId });
+
+    if (resolvedCoupons.length > 0) {
+      for (const coupon of resolvedCoupons) {
+        notifyUser(userId, NotificationType.COUPON_APPLIED, {
+          code: coupon.code,
+          discount: coupon.discountAmount,
+        });
+      }
+    }
 
     return {
       jobId: pending.id, // pendingId is the stable client-facing token
@@ -221,10 +363,17 @@ class OrderService {
     const allProductIds = rows.flatMap(
       (o) => ((o as unknown as { items: OrderItem[] }).items ?? []).map((i) => i.productId),
     );
-    const userRatingsMap = await this.buildUserRatingsMap(userId, [...new Set(allProductIds)]);
+    const userReviewsMap = await this.buildUserReviewsMap(userId, [...new Set(allProductIds)]);
+    const orderIds = rows.map((o) => o.id);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds(orderIds),
+      buildShadowfaxOrderIdByOrderIds(orderIds),
+    ]);
 
     return {
-      orders: rows.map((o) => this.formatOrder(o, userRatingsMap)),
+      orders: rows.map((o) =>
+        this.formatOrder(o, userReviewsMap, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+      ),
       total: count,
       page,
       limit,
@@ -234,30 +383,46 @@ class OrderService {
   /**
    * Returns orders that contain items belonging to the vendor's store.
    */
-  async listVendorOrders(vendorId: string, page = 1, limit = 20) {
+  async listVendorOrders(
+    vendorId: string,
+    status?: OrderStatus,
+    page = 1,
+    limit = 20,
+    range?: DateRange,
+  ) {
     const offset = (page - 1) * limit;
 
-    // 1. Find vendor's store
     const store = await Store.findOne({ where: { ownerId: vendorId } });
     if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
 
-    // 2. Find orders containing items for this store
-    // We join Order -> OrderItems -> Product to filter by storeId
+    // Filter orders in WHERE — required Product include + findAndCountAll generates invalid SQL
+    // (references items.* without joining order_items; address join uses wrong column).
+    const storeOrderIds = sequelize.literal(
+      `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(store.id)})`,
+    );
+
+    const where: Record<string, unknown> = { id: { [Op.in]: storeOrderIds } };
+    if (status) {
+      where.status = status;
+    } else {
+      where.status = { [Op.ne]: 'pending' };
+    }
+    if (range) {
+      where.createdAt = { [Op.gte]: range.start, [Op.lte]: range.end };
+    }
+
     const { count, rows } = await Order.findAndCountAll({
-      distinct: true,
+      where,
       include: [
         {
           model: OrderItem,
           as: 'items',
-          required: true, // INNER JOIN
           include: [
             {
               model: Product,
               as: 'product',
-              required: true,
-              where: { storeId: store.id },
-              attributes: [], // We don't need product data in the root
-              include: [{ model: ProductImage, as: 'images', attributes: [] }], // Only needed if we mapped images here, but actually we need attributes to extract it!
+              attributes: ['id', 'storeId'],
+              include: [{ model: ProductImage, as: 'images' }],
             },
             {
               model: ProductVariant,
@@ -278,10 +443,163 @@ class OrderService {
       order: [['createdAt', 'DESC']],
       limit,
       offset,
+      distinct: true,
     });
 
+    const orderIds = rows.map((o) => o.id);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds(orderIds),
+      buildShadowfaxOrderIdByOrderIds(orderIds),
+    ]);
+
     return {
-      orders: rows.map((o) => this.formatOrder(o)),
+      orders: rows.map((o) =>
+        this.formatOrder(o, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+      ),
+      total: count,
+      page,
+      limit,
+    };
+  }
+
+  /**
+   * Returns a single order by ID if it contains items from the vendor's store.
+   */
+  async getVendorOrderById(orderId: string, vendorId: string) {
+    const store = await Store.findOne({ where: { ownerId: vendorId } });
+    if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
+
+    const storeOrderIds = sequelize.literal(
+      `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(store.id)})`,
+    );
+
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
+    const order = await Order.findOne({
+      where: {
+        [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
+      },
+      include: [
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Product,
+              as: 'product',
+              attributes: ['id', 'storeId'],
+              include: [{ model: ProductImage, as: 'images' }],
+            },
+            {
+              model: ProductVariant,
+              as: 'variant',
+              include: [
+                {
+                  model: ProductColor,
+                  as: 'color',
+                  include: [{ model: ProductColorImage, as: 'images' }],
+                },
+              ],
+            },
+          ],
+        },
+        { model: Address, as: 'address' },
+        { model: Payment, as: 'payments' },
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'phone', 'email', 'profileImage'],
+        },
+      ],
+    });
+
+    if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds([order.id]),
+      buildShadowfaxOrderIdByOrderIds([order.id]),
+    ]);
+    const formatted = this.formatOrder(
+      order,
+      undefined,
+      walletPaidByOrderId,
+      shadowfaxOrderIdByOrderId,
+    );
+    const user = (order as unknown as { user?: User }).user;
+
+    return {
+      ...formatted,
+      customer: user ? this.formatOrderCustomer(user) : null,
+    };
+  }
+
+  /**
+   * Returns paginated vendor orders within a date range and qualifying sales statuses.
+   */
+  async listVendorOrdersInRange(
+    vendorId: string,
+    range: { start: Date; end: Date },
+    page = 1,
+    limit = 20,
+  ) {
+    const offset = (page - 1) * limit;
+
+    const store = await Store.findOne({ where: { ownerId: vendorId } });
+    if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
+
+    const storeOrderIds = sequelize.literal(
+      `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(store.id)})`,
+    );
+
+    const { count, rows } = await Order.findAndCountAll({
+      where: {
+        id: { [Op.in]: storeOrderIds },
+        status: { [Op.in]: [...VENDOR_SALES_ORDER_STATUSES] },
+        createdAt: { [Op.gte]: range.start, [Op.lte]: range.end },
+      },
+      include: [
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Product,
+              as: 'product',
+              attributes: ['id', 'storeId'],
+              include: [{ model: ProductImage, as: 'images' }],
+            },
+            {
+              model: ProductVariant,
+              as: 'variant',
+              include: [
+                {
+                  model: ProductColor,
+                  as: 'color',
+                  include: [{ model: ProductColorImage, as: 'images' }],
+                },
+              ],
+            },
+          ],
+        },
+        { model: Address, as: 'address' },
+        { model: Payment, as: 'payments' },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
+      distinct: true,
+    });
+
+    const orderIds = rows.map((o) => o.id);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds(orderIds),
+      buildShadowfaxOrderIdByOrderIds(orderIds),
+    ]);
+
+    return {
+      orders: rows.map((o) =>
+        this.formatOrder(o, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+      ),
       total: count,
       page,
       limit,
@@ -289,8 +607,10 @@ class OrderService {
   }
 
   async getOrderById(orderId: string, userId: string) {
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
     const order = await Order.findOne({
-      where: { id: orderId, userId },
+      where: { ...orderRefWhere, userId },
       include: [
         {
           model: OrderItem,
@@ -326,16 +646,30 @@ class OrderService {
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
 
     const productIds = ((order as unknown as { items: OrderItem[] }).items ?? []).map((i) => i.productId);
-    const userRatingsMap = await this.buildUserRatingsMap(userId, productIds);
+    const userReviewsMap = await this.buildUserReviewsMap(userId, productIds);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds([order.id]),
+      buildShadowfaxOrderIdByOrderIds([order.id]),
+    ]);
 
-    return this.formatOrder(order, userRatingsMap);
+    return this.formatOrder(order, userReviewsMap, walletPaidByOrderId, shadowfaxOrderIdByOrderId);
+  }
+
+  async getDeliveryStatus(
+    orderId: string,
+    userId: string,
+    role: string,
+  ): Promise<ShadowfaxOrderStatusData> {
+    return getOrderDeliveryStatus(orderId, { userId, role });
   }
 
   // ─── Cancel ───────────────────────────────────────────────────────────────────
 
   async cancelOrder(orderId: string, userId: string) {
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
     const order = await Order.findOne({
-      where: { id: orderId, userId },
+      where: { ...orderRefWhere, userId },
       include: [{ model: OrderItem, as: 'items' }],
     });
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
@@ -347,10 +681,15 @@ class OrderService {
       );
     }
 
+    const wasPendingUnpaid = order.status === 'pending';
     const items = (order as unknown as { items: OrderItem[] }).items ?? [];
 
     const t = await sequelize.transaction();
     try {
+      if (wasPendingUnpaid) {
+        await failPendingPaymentsForOrder(order.id, t);
+      }
+
       for (const item of items) {
         if (!item.variantId) continue;
 
@@ -367,6 +706,12 @@ class OrderService {
         await variant.update({ stock: variant.stock + item.quantity }, { transaction: t });
       }
 
+      const restockedProductIds = [...new Set(items.map((item) => item.productId).filter(Boolean))];
+      for (const productId of restockedProductIds) {
+        await syncProductStockFromVariants(productId, t);
+      }
+
+      await this._refundCapturedPaymentOnCancel(order.id, t);
       await order.update({ status: 'cancelled' }, { transaction: t });
       await t.commit();
     } catch (err) {
@@ -374,14 +719,24 @@ class OrderService {
       throw err;
     }
 
-    return this.formatOrder(order);
+    if (wasPendingUnpaid) {
+      notifyPaymentCancelled(userId, order.id);
+    } else {
+      notifyBuyerOrderStatus(userId, order.id, 'cancelled');
+    }
+
+    const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
+
+    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
   }
 
   // ─── Wallet payment ───────────────────────────────────────────────────────────
 
   async payWithWallet(orderId: string, userId: string) {
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
     const order = await Order.findOne({
-      where: { id: orderId, userId },
+      where: { ...orderRefWhere, userId },
       include: [
         { model: OrderItem, as: 'items' },
         { model: Address, as: 'address' },
@@ -437,8 +792,19 @@ class OrderService {
 
       await t.commit();
 
+      scheduleShadowfaxPlacementIfDelivery(order);
+
+      notifyUser(userId, NotificationType.WALLET_DEBITED, { amount: totalAmount });
+      void notifyOrderPlacedAfterPayment(userId, order.id);
+      notifyBuyerOrderStatus(userId, order.id, 'confirmed');
+
+      const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+        buildWalletPaidByOrderIds([order.id]),
+        buildShadowfaxOrderIdByOrderIds([order.id]),
+      ]);
+
       return {
-        order: this.formatOrder(order),
+        order: this.formatOrder(order, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
         walletBalance: balanceAfter,
       };
     } catch (err) {
@@ -450,21 +816,15 @@ class OrderService {
   // ─── Vendor: update order status ─────────────────────────────────────────────
 
   async updateVendorOrderStatus(orderId: string, vendorId: string, newStatus: string): Promise<ReturnType<typeof this.formatOrder>> {
-    const validTransitions: Record<string, string[]> = {
-      pending: ['confirmed', 'cancelled'],
-      confirmed: ['processing', 'cancelled'],
-      processing: ['shipped', 'cancelled'],
-      shipped: ['delivered'],
-      delivered: [],
-      cancelled: [],
-    };
+    const toStatus = normalizeOrderStatusInput(newStatus);
 
     const store = await Store.findOne({ where: { ownerId: vendorId } });
     if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
 
-    // Fetch the order only if it contains items from this vendor's store
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
     const order = await Order.findOne({
-      where: { id: orderId },
+      where: orderRefWhere,
       include: [
         {
           model: OrderItem,
@@ -486,26 +846,85 @@ class OrderService {
 
     if (!order) throw AppError.forbidden('Order does not contain items from your store', 'ORDER_FORBIDDEN');
 
-    const allowed = validTransitions[order.status] ?? [];
-    if (!allowed.includes(newStatus)) {
-      throw AppError.badRequest(
-        `Cannot transition order from "${order.status}" to "${newStatus}"`,
-        'INVALID_STATUS_TRANSITION',
-      );
-    }
-
-    if (newStatus === 'delivered') {
+    if (toStatus === 'delivered') {
       const t = await sequelize.transaction();
       try {
-        await order.update({ status: 'delivered' }, { transaction: t });
+        const result = await transitionOrderStatus({
+          orderId: order.id,
+          toStatus: 'delivered',
+          source: 'vendor',
+          allowManual: true,
+          orderPatch: { deliveredAt: new Date() },
+          transaction: t,
+          skipPublish: true,
+        });
+        if (!result.applied && result.reason === 'invalid_transition') {
+          throw AppError.badRequest(
+            `Cannot transition order from "${order.status}" to "${toStatus}"`,
+            'INVALID_STATUS_TRANSITION',
+          );
+        }
         await this._grantReferralReward(order.userId, t);
         await t.commit();
+        if (result.applied) {
+          await publishOrderStatusChanged({
+            orderId: order.id,
+            userId: order.userId,
+            oldStatus: result.oldStatus,
+            newStatus: result.newStatus,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        await t.rollback();
+        throw err;
+      }
+    } else if (toStatus === 'cancelled') {
+      const t = await sequelize.transaction();
+      try {
+        await this._refundCapturedPaymentOnCancel(order.id, t);
+        const result = await transitionOrderStatus({
+          orderId: order.id,
+          toStatus: 'cancelled',
+          source: 'vendor',
+          allowManual: true,
+          orderPatch: { cancelledAt: new Date() },
+          transaction: t,
+          skipPublish: true,
+        });
+        if (!result.applied && result.reason === 'invalid_transition') {
+          throw AppError.badRequest(
+            `Cannot transition order from "${order.status}" to "${toStatus}"`,
+            'INVALID_STATUS_TRANSITION',
+          );
+        }
+        await t.commit();
+        if (result.applied) {
+          await publishOrderStatusChanged({
+            orderId: order.id,
+            userId: order.userId,
+            oldStatus: result.oldStatus,
+            newStatus: result.newStatus,
+            timestamp: new Date().toISOString(),
+          });
+        }
       } catch (err) {
         await t.rollback();
         throw err;
       }
     } else {
-      await order.update({ status: newStatus as OrderStatus });
+      const result = await transitionOrderStatus({
+        orderId: order.id,
+        toStatus,
+        source: 'vendor',
+        allowManual: true,
+      });
+      if (!result.applied && result.reason === 'invalid_transition') {
+        throw AppError.badRequest(
+          `Cannot transition order from "${order.status}" to "${toStatus}"`,
+          'INVALID_STATUS_TRANSITION',
+        );
+      }
     }
 
     await order.reload({
@@ -515,23 +934,20 @@ class OrderService {
       ],
     });
 
-    return this.formatOrder(order);
+    const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
+
+    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
   }
 
   // ─── Admin: update order status ───────────────────────────────────────────────
 
   async updateStatus(orderId: string, newStatus: string): Promise<ReturnType<typeof this.formatOrder>> {
-    const validTransitions: Record<string, string[]> = {
-      pending: ['confirmed', 'cancelled'],
-      confirmed: ['processing', 'cancelled'],
-      processing: ['shipped', 'cancelled'],
-      shipped: ['delivered'],
-      delivered: [],
-      cancelled: [],
-    };
+    const toStatus = normalizeOrderStatusInput(newStatus);
+
+    const orderRefWhere = await buildOrderRefWhere(orderId);
 
     const order = await Order.findOne({
-      where: { id: orderId },
+      where: orderRefWhere,
       include: [
         { model: OrderItem, as: 'items' },
         { model: Address, as: 'address' },
@@ -540,29 +956,87 @@ class OrderService {
 
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
 
-    const allowed = validTransitions[order.status] ?? [];
-    if (!allowed.includes(newStatus)) {
-      throw AppError.badRequest(
-        `Cannot transition order from "${order.status}" to "${newStatus}"`,
-        'INVALID_STATUS_TRANSITION',
-      );
-    }
-
-    if (newStatus === 'delivered') {
+    if (toStatus === 'delivered') {
       const t = await sequelize.transaction();
       try {
-        await order.update({ status: 'delivered' }, { transaction: t });
+        const result = await transitionOrderStatus({
+          orderId: order.id,
+          toStatus: 'delivered',
+          source: 'admin',
+          allowManual: true,
+          orderPatch: { deliveredAt: new Date() },
+          transaction: t,
+          skipPublish: true,
+        });
+        if (!result.applied && result.reason === 'invalid_transition') {
+          throw AppError.badRequest(
+            `Cannot transition order from "${order.status}" to "${toStatus}"`,
+            'INVALID_STATUS_TRANSITION',
+          );
+        }
         await this._grantReferralReward(order.userId, t);
         await t.commit();
+        if (result.applied) {
+          await publishOrderStatusChanged({
+            orderId: order.id,
+            userId: order.userId,
+            oldStatus: result.oldStatus,
+            newStatus: result.newStatus,
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } catch (err) {
+        await t.rollback();
+        throw err;
+      }
+    } else if (toStatus === 'cancelled') {
+      const t = await sequelize.transaction();
+      try {
+        await this._refundCapturedPaymentOnCancel(order.id, t);
+        const result = await transitionOrderStatus({
+          orderId: order.id,
+          toStatus: 'cancelled',
+          source: 'admin',
+          allowManual: true,
+          orderPatch: { cancelledAt: new Date() },
+          transaction: t,
+          skipPublish: true,
+        });
+        if (!result.applied && result.reason === 'invalid_transition') {
+          throw AppError.badRequest(
+            `Cannot transition order from "${order.status}" to "${toStatus}"`,
+            'INVALID_STATUS_TRANSITION',
+          );
+        }
+        await t.commit();
+        if (result.applied) {
+          await publishOrderStatusChanged({
+            orderId: order.id,
+            userId: order.userId,
+            oldStatus: result.oldStatus,
+            newStatus: result.newStatus,
+            timestamp: new Date().toISOString(),
+          });
+        }
       } catch (err) {
         await t.rollback();
         throw err;
       }
     } else {
-      await order.update({ status: newStatus as OrderStatus });
+      const result = await transitionOrderStatus({
+        orderId: order.id,
+        toStatus,
+        source: 'admin',
+        allowManual: true,
+      });
+      if (!result.applied && result.reason === 'invalid_transition') {
+        throw AppError.badRequest(
+          `Cannot transition order from "${order.status}" to "${toStatus}"`,
+          'INVALID_STATUS_TRANSITION',
+        );
+      }
     }
 
-    // Reload to get fresh state
     await order.reload({
       include: [
         { model: OrderItem, as: 'items' },
@@ -570,12 +1044,114 @@ class OrderService {
       ],
     });
 
-    return this.formatOrder(order);
+    const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
+
+    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
+  }
+
+  // ─── Cancellation refund (private) ────────────────────────────────────────────
+
+  /**
+   * Credits the customer's wallet for the full `order.totalAmount` once (store credit;
+   * no Razorpay refund API). Covers Razorpay-only, full-wallet, partial-wallet, and
+   * pay-with-wallet flows — all use `orders.total_amount` as the source of truth.
+   *
+   * Skips wallet credit when the order is still `pending` (never paid).
+   * Idempotent via WalletTransaction reference `refund_cancel_${orderId}`.
+   * Marks every `Payment` row still in `captured` as `refunded` after a successful
+   * wallet credit, or when the refund transaction already exists (cleanup).
+   */
+  private async _refundCapturedPaymentOnCancel(orderId: string, t: Transaction): Promise<void> {
+    const order = await Order.findOne({
+      where: { id: orderId },
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+    if (!order) return;
+
+    if (order.status === 'pending') {
+      return;
+    }
+
+    const reference = `refund_cancel_${orderId}`;
+
+    const markAllCapturedPaymentsRefunded = async (): Promise<void> => {
+      await Payment.update(
+        {
+          status: 'refunded',
+          refundProcessedAt: new Date(),
+        },
+        { where: { orderId, status: 'captured' }, transaction: t },
+      );
+    };
+
+    const existingRefund = await WalletTransaction.findOne({
+      where: { reference },
+      transaction: t,
+    });
+    if (existingRefund) {
+      await markAllCapturedPaymentsRefunded();
+      return;
+    }
+
+    const refundAmount = parseFloat(Number(order.totalAmount).toFixed(2));
+    if (refundAmount <= 0) {
+      return;
+    }
+
+    const wallet = await Wallet.findOne({
+      where: { userId: order.userId },
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+    if (!wallet || !wallet.isActive) {
+      logger.warn(
+        { orderId, userId: order.userId },
+        'Cannot refund cancelled order — wallet missing or inactive; leaving payments unchanged',
+      );
+      return;
+    }
+
+    const capturedPayments = await Payment.findAll({
+      where: { orderId, status: 'captured' },
+      attributes: ['id'],
+      lock: t.LOCK.UPDATE,
+      transaction: t,
+    });
+
+    const balanceBefore = Number(wallet.balance);
+    const balanceAfter = parseFloat((balanceBefore + refundAmount).toFixed(2));
+
+    await wallet.update({ balance: balanceAfter }, { transaction: t });
+
+    await WalletTransaction.create(
+      {
+        walletId: wallet.id,
+        reference,
+        type: 'credit',
+        amount: refundAmount,
+        fee: 0,
+        balanceBefore,
+        balanceAfter,
+        status: 'successful',
+        source: 'refund',
+        provider: null,
+        providerReference: null,
+        metadata: {
+          orderId,
+          reason: 'order_cancel',
+          paymentIds: capturedPayments.map((p) => p.id),
+        },
+      },
+      { transaction: t },
+    );
+
+    await markAllCapturedPaymentsRefunded();
   }
 
   // ─── Referral reward (private) ────────────────────────────────────────────────
 
-  private async _grantReferralReward(userId: string, t: import('sequelize').Transaction): Promise<void> {
+  private async _grantReferralReward(userId: string, t: Transaction): Promise<void> {
     // Only trigger on first completed order
     const deliveredCount = await Order.count({
       where: { userId, status: 'delivered' },
@@ -608,6 +1184,9 @@ class OrderService {
       { reason: 'Referral reward — your referral placed their first order', referredUserId: userId },
       t,
     );
+
+    notifyUser(userId, NotificationType.REFERRAL_REWARD_CREDITED, { amount: rewardAmount });
+    notifyUser(user.referredById, NotificationType.REFERRAL_REWARD_CREDITED, { amount: rewardAmount });
   }
 
   private async _creditWallet(
@@ -615,7 +1194,7 @@ class OrderService {
     reference: string,
     amount: number,
     metadata: object,
-    t: import('sequelize').Transaction,
+    t: Transaction,
   ): Promise<void> {
     const wallet = await Wallet.findOne({
       where: { userId },
@@ -650,41 +1229,106 @@ class OrderService {
     );
   }
 
-  private async buildUserRatingsMap(userId: string, productIds: string[]): Promise<Map<string, number | null>> {
+  private formatVariantForOrderItem(
+    variant: ProductVariant & { color?: ProductColor & { images?: ProductColorImage[] } },
+    resolvedImageUrl: string | null,
+  ): Record<string, unknown> | null {
+    if (!variant) return null;
+
+    const variantJson = variant.toPublicJSON() as Record<string, unknown>;
+    const colorModel = variant.color;
+
+    if (colorModel) {
+      const sortedImages = [...(colorModel.images ?? [])].sort(
+        (a, b) => Number(a.displayOrder) - Number(b.displayOrder),
+      );
+      variantJson.color = {
+        ...colorModel.toPublicJSON(),
+        images: sortedImages.map((img) => img.toPublicJSON()),
+      };
+    } else {
+      variantJson.color = null;
+    }
+
+    variantJson.imageUrl = resolvedImageUrl;
+    return variantJson;
+  }
+
+  /** Current user's product review per productId (for order line items). */
+  private async buildUserReviewsMap(
+    userId: string,
+    productIds: string[],
+  ): Promise<Map<string, OrderLineItemMyReview | null>> {
     if (!productIds.length) return new Map();
     const reviews = await ProductReview.findAll({
       where: { userId, productId: { [Op.in]: productIds } },
-      attributes: ['productId', 'rating'],
+      attributes: ['id', 'productId', 'rating', 'comment', 'createdAt'],
+      include: [{ model: ProductReviewImage, as: 'images' }],
     });
-    return new Map(reviews.map((r) => [r.productId, r.rating]));
+    return new Map(
+      reviews.map((r) => {
+        const reviewImages = ((r as unknown as { images?: ProductReviewImage[] }).images ?? []).map(
+          (img) => img.toPublicJSON(),
+        );
+        return [
+          r.productId,
+          {
+            id: r.id,
+            rating: Number(r.rating),
+            comment: r.comment ?? null,
+            createdAt: r.createdAt?.toISOString?.() ?? null,
+            images: reviewImages,
+          },
+        ];
+      }),
+    );
   }
 
-  private formatOrder(order: Order, userRatingsMap?: Map<string, number | null>) {
+  private formatOrderCustomer(user: User) {
+    return {
+      id: user.id,
+      name: user.name ?? null,
+      phone: user.phone ?? null,
+      email: user.email ?? null,
+      profileImage: user.profileImage ?? null,
+    };
+  }
+
+  private formatOrder(
+    order: Order,
+    userReviewsMap?: Map<string, OrderLineItemMyReview | null>,
+    walletPaidByOrderId?: Map<string, number>,
+    shadowfaxOrderIdByOrderId?: Map<string, string | null>,
+  ) {
     const items = ((order as unknown as { items: OrderItem[] }).items ?? []).map((i) => {
       const product = (i as any).product as { store?: Store; images?: ProductImage[] } | undefined;
-      const variant = (i as any).variant as (ProductVariant & { color?: { images?: ProductColorImage[] } }) | null;
+      const variant = (i as any).variant as
+        | (ProductVariant & { color?: ProductColor & { images?: ProductColorImage[] } })
+        | null;
 
       let imageUrl: string | null = null;
       if (variant?.color?.images?.length) {
-        // Sort by display order
-        const sortedColorImages = [...variant.color.images].sort((a, b) => a.displayOrder - b.displayOrder);
+        const sortedColorImages = [...variant.color.images].sort(
+          (a, b) => Number(a.displayOrder) - Number(b.displayOrder),
+        );
         imageUrl = sortedColorImages[0].imageUrl;
       } else if (product?.images?.length) {
         const sortedImages = [...product.images].sort((a, b) => a.position - b.position);
         imageUrl = sortedImages[0].url;
       }
 
-      const variantJson = variant ? variant.toPublicJSON() : null;
-      if (variantJson) {
-        variantJson.imageUrl = imageUrl;
-      }
+      const variantJson = variant ? this.formatVariantForOrderItem(variant, imageUrl) : null;
+
+      const myReview = userReviewsMap?.get(i.productId) ?? null;
 
       return {
         ...i.toPublicJSON(),
         variant: variantJson,
         productImage: imageUrl,
         store: product?.store ? (product.store as Store).toPublicJSON() : null,
-        userRating: userRatingsMap?.get(i.productId) ?? null,
+        /** @deprecated Prefer `myReview.rating` — kept for backward compatibility. */
+        userRating: myReview?.rating ?? null,
+        myReview,
       };
     });
     const address = (order as unknown as { address: Address | null }).address;
@@ -692,13 +1336,27 @@ class OrderService {
 
     // Pick the latest captured payment to surface paymentType at order level
     const capturedPayment = payments.find((p: any) => p.status === 'captured');
+    const walletAmountPaid = resolveWalletAmountPaid(order.id, payments, walletPaidByOrderId);
+
+    const publicOrder = order.toPublicJSON();
+    const deliveryWaivedReason = resolveDeliveryWaivedReason({
+      deliveryType: order.deliveryType,
+      deliveryCharge: Number(publicOrder.deliveryCharge),
+      couponCode: publicOrder.couponCode as string | null,
+    });
 
     return {
-      ...order.toPublicJSON(),
+      ...publicOrder,
       items,
       address: address ? address.toPublicJSON() : null,
       paymentType: capturedPayment?.paymentType ?? null,
+      walletAmountPaid,
+      shadowfaxOrderId:
+        publicOrder.shadowfaxOrderId ??
+        resolveShadowfaxOrderId(order.id, shadowfaxOrderIdByOrderId),
       payments,
+      deliveryWaivedReason,
+      deliveryConfig: getPublicDeliveryConfig(),
     };
   }
 }

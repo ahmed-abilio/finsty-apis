@@ -100,3 +100,74 @@ export async function fixBrandConstraints(sequelize: any) {
     logger.error('Error while fixing brand unique constraints:', error);
   }
 }
+
+/**
+ * Ensures `orders.order_id` exists and is fully usable in environments where
+ * model sync/migrations are not run automatically.
+ */
+export async function ensureOrderIdColumn(sequelize: any) {
+  try {
+    const [ordersTableExists] = await sequelize.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'orders'
+      );
+    `);
+
+    if (!ordersTableExists[0].exists) return;
+
+    await sequelize.query(`
+      ALTER TABLE orders
+      ADD COLUMN IF NOT EXISTS order_id VARCHAR(12);
+    `);
+
+    // Backfill old rows so NOT NULL + unique index can be safely applied.
+    await sequelize.query(`
+      UPDATE orders
+      SET order_id = 'FI' || UPPER(SUBSTRING(REPLACE(id::text, '-', '') FROM 1 FOR 10))
+      WHERE order_id IS NULL OR order_id = '';
+    `);
+
+    await sequelize.query(`
+      ALTER TABLE orders
+      ALTER COLUMN order_id SET NOT NULL;
+    `);
+
+    await sequelize.query(`
+      CREATE UNIQUE INDEX IF NOT EXISTS orders_order_id_unique_idx
+      ON orders (order_id);
+    `);
+
+    logger.info('Ensured orders.order_id column and unique index');
+  } catch (error) {
+    logger.error('Error while ensuring orders.order_id column:', error);
+  }
+}
+
+/**
+ * Ensures `product_variants.size_chart` exists in environments where
+ * model sync/migrations are not run automatically.
+ */
+export async function ensureVariantSizeChartColumn(sequelize: any) {
+  try {
+    const [variantsTableExists] = await sequelize.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'product_variants'
+      );
+    `);
+
+    if (!variantsTableExists[0].exists) return;
+
+    await sequelize.query(`
+      ALTER TABLE product_variants
+      ADD COLUMN IF NOT EXISTS size_chart VARCHAR(2048);
+    `);
+
+    logger.info('Ensured product_variants.size_chart column');
+  } catch (error) {
+    logger.error('Error while ensuring product_variants.size_chart column:', error);
+  }
+}

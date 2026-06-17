@@ -1,10 +1,27 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Body types ────────────────────────────────────────────────────────────────
 
 export interface RefreshTokenBody {
   refreshToken: string;
+  deviceToken?: string;
+  platform?: 'ios' | 'android';
 }
+
+const deviceTokenProperties = {
+  deviceToken: {
+    type: 'string',
+    minLength: 1,
+    description: 'FCM registration token (optional; send with platform)',
+  },
+  platform: {
+    type: 'string',
+    enum: ['ios', 'android'],
+    description: 'Device platform (required when deviceToken is sent)',
+  },
+} as const;
 
 // ─── Shared shapes ─────────────────────────────────────────────────────────────
 
@@ -23,6 +40,7 @@ const idTokenBody = {
       maxLength: 20,
       description: 'Optional referral code from an existing user (only applied for new accounts)',
     },
+    ...deviceTokenProperties,
   },
   additionalProperties: false,
 } as const;
@@ -48,6 +66,7 @@ const phoneOtpBody = {
       maxLength: 20,
       description: 'Optional referral code from an existing user (only applied for new accounts)',
     },
+    ...deviceTokenProperties,
   },
   additionalProperties: false,
 } as const;
@@ -100,22 +119,6 @@ const unauthorizedResponse = {
       properties: {
         code: { type: 'string' },
         message: { type: 'string' },
-      },
-    },
-  },
-} as const;
-
-const validationErrorResponse = {
-  description: 'Validation error',
-  type: 'object',
-  properties: {
-    success: { type: 'boolean' },
-    error: {
-      type: 'object',
-      properties: {
-        code: { type: 'string' },
-        message: { type: 'string' },
-        statusCode: { type: 'number' },
       },
     },
   },
@@ -187,13 +190,18 @@ export const sendOtpSchema: FastifySchema = {
 }
 };
 
+const pushTokenNote =
+  ' Optionally include `deviceToken` and `platform` (`ios`|`android`) in this request to register for push notifications, ' +
+  'or call `PUT /api/v1/users/me/device-token` after login / when the FCM token refreshes.';
+
 // ─── POST /auth/verify-otp ────────────────────────────────────────────────────
 
 export const verifyOtpSchema: FastifySchema = {
   tags: ['Customer Auth'],
   summary: 'Verify OTP and authenticate',
   description:
-    'Submit the phone number and the OTP received via SMS. Returns API access + refresh tokens on success.',
+    'Submit the phone number and the OTP received via SMS. Returns API access + refresh tokens on success.' +
+    pushTokenNote,
   body: phoneOtpBody,
   response: {
     200: { description: 'Authenticated successfully (existing user)', ...authSuccessResponse },
@@ -243,6 +251,7 @@ export const refreshTokenSchema: FastifySchema = {
     required: ['refreshToken'],
     properties: {
       refreshToken: { type: 'string', minLength: 10 },
+      ...deviceTokenProperties,
     },
     additionalProperties: false,
   },
@@ -293,6 +302,7 @@ const roleOtpVerifyBody = {
       maxLength: 6,
       description: 'OTP code received via SMS',
     },
+    ...deviceTokenProperties,
   },
   additionalProperties: false,
 } as const;
@@ -327,7 +337,9 @@ export const adminSendOtpSchema: FastifySchema = {
 export const adminVerifyOtpSchema: FastifySchema = {
   tags: ['Admin Auth'],
   summary: 'Verify OTP and authenticate as admin',
-  description: 'Verifies the OTP and returns tokens. Returns 403 if the phone number does not belong to an admin account.',
+  description:
+    'Verifies the OTP and returns tokens. Returns 403 if the phone number does not belong to an admin account.' +
+    pushTokenNote,
   body: roleOtpVerifyBody,
   response: {
     200: { description: 'Authenticated successfully', ...authSuccessResponse },
@@ -343,7 +355,8 @@ export const adminVerifyOtpSchema: FastifySchema = {
 export const vendorSendOtpSchema: FastifySchema = {
   tags: ['Vendor Auth'],
   summary: 'Send OTP (vendor login)',
-  description: 'Sends a one-time password to the phone number. Only users with the vendor role can complete the verify step.',
+  description:
+    'Sends a one-time password to the phone number. Verify step creates a vendor account on first login if the phone is new.',
   body: roleOtpSendBody,
   response: otpSentResponse,
 };
@@ -353,7 +366,10 @@ export const vendorSendOtpSchema: FastifySchema = {
 export const vendorVerifyOtpSchema: FastifySchema = {
   tags: ['Vendor Auth'],
   summary: 'Verify OTP and authenticate as vendor',
-  description: 'Verifies the OTP and returns tokens. Returns 403 if the phone number does not belong to a vendor account.',
+  description:
+    'Verifies the OTP and returns tokens. Creates a new vendor user on first login (201). ' +
+    'Response includes `user` (use `user.id` as `ownerId` for POST /stores) and `store` (null until onboarded).' +
+    pushTokenNote,
   body: roleOtpVerifyBody,
   response: {
     200: { description: 'Authenticated successfully', ...authSuccessResponse },

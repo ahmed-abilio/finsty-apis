@@ -1,15 +1,12 @@
 import jwt from 'jsonwebtoken';
 import { DecodedIdToken } from 'firebase-admin/auth';
 import { firebaseAuth } from '@config/firebase';
-import redis from '@config/redis';
 import userService from '@modules/user/user.service';
 import { AppError } from '@utils/appError';
 import { AuthProvider, JwtPayload, TokenPair } from '@types-app/index';
 import type User from '@modules/user/user.model';
-
-// TODO: replace with third-party OTP provider (e.g. Twilio, Termii)
-const DEFAULT_OTP = '1234';
-const OTP_TTL_SECONDS = 300; // 5 minutes
+import { Roles } from '@modules/user/user.model';
+import otpService from '@modules/otp/otp.service';
 
 const JWT_SECRET = process.env.JWT_SECRET as string;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN as string;
@@ -50,13 +47,8 @@ export async function verifyFirebaseToken(idToken: string): Promise<DecodedIdTok
 
 // ─── Phone OTP flow (no Firebase — third-party provider to be wired later) ───
 
-function otpRedisKey(phone: string): string {
-  return `otp:${phone}`;
-}
-
 export async function sendOtp(phone: string): Promise<void> {
-  await redis.set(otpRedisKey(phone), DEFAULT_OTP, 'EX', OTP_TTL_SECONDS);
-  // TODO: trigger real SMS delivery via third-party provider here
+  await otpService.sendPhoneOtp(phone);
 }
 
 export async function verifyOtp(
@@ -66,58 +58,62 @@ export async function verifyOtp(
   referralCode?: string | null,
   requiredRole?: 'admin' | 'vendor' | 'user',
 ): Promise<{ tokens: TokenPair; user: User; isNew: boolean }> {
-  const key = otpRedisKey(phone);
-  const stored = await redis.get(key);
-
-  if (!stored || stored !== otp) {
-    throw AppError.unauthorized('Invalid or expired OTP', 'INVALID_OTP');
+  try {
+    await otpService.verifyPhoneOtp(phone, otp);
+  } catch (error) {
+    if (error instanceof AppError) {
+      throw AppError.unauthorized('Invalid or expired OTP', 'INVALID_OTP');
+    }
+    throw error;
   }
-
-  // One-time use — delete immediately after successful verification
-  await redis.del(key);
 
   // ─── Role-specific endpoints (Admin / Vendor) ──────────────────────────────
   if (requiredRole) {
-    const existingUser = await userService.findByPhone(phone);
+    const existingUser = await userService.findByPhoneForRole(phone, {
+      role: requiredRole as Roles,
+    });
 
     if (existingUser) {
-      // User exists — validate their role strictly
-      const existingRole = existingUser.role || (existingUser as any).dataValues?.role;
-
-      if (existingRole !== requiredRole) {
-        throw AppError.forbidden(
-          `Access denied: this phone is already registered as a ${existingRole}`,
-          'ACCESS_DENIED',
-        );
+      const isActive =
+        existingUser.isActive ??
+        (existingUser as { dataValues?: { isActive?: boolean; is_active?: boolean } }).dataValues
+          ?.isActive ??
+        (existingUser as { dataValues?: { is_active?: boolean } }).dataValues?.is_active;
+      if (isActive === false) {
+        throw AppError.forbidden('Account is deactivated', 'ACCOUNT_DEACTIVATED');
       }
-
-      // Role matches — issue tokens and return
       await existingUser.update({ ipAddress: ipAddress ?? null });
       await existingUser.reload();
       const tokens = await issueTokenPair(existingUser);
       return { tokens, user: existingUser, isNew: false };
     }
 
-    // User doesn't exist — create with the requiredRole
-    const [newUser] = await userService.upsert({
-      firebaseUid: phone,
-      phone,
-      provider: 'phone',
-      role: requiredRole as any,
-      ipAddress: ipAddress ?? null,
-      referralCode: referralCode ?? null,
-      isActive: requiredRole === 'vendor' ? false : true,
-    });
+    // Vendors may self-register: first OTP verify creates vendor_users row (store onboarding is separate).
+    if (requiredRole === Roles.VENDOR) {
+      const [user, isNew] = await userService.upsertForRole({
+        firebaseUid: phone,
+        phone,
+        provider: 'phone',
+        role: Roles.VENDOR,
+        ipAddress: ipAddress ?? null,
+        isActive: true,
+      });
+      const tokens = await issueTokenPair(user);
+      return { tokens, user, isNew };
+    }
 
-    const tokens = await issueTokenPair(newUser);
-    return { tokens, user: newUser, isNew: true };
+    throw AppError.forbidden(
+      'No admin account exists for this phone number',
+      'ADMIN_NOT_FOUND',
+    );
   }
 
   // ─── Generic customer endpoint ─────────────────────────────────────────────
-  const [user, isNew] = await userService.upsert({
+  const [user, isNew] = await userService.upsertForRole({
     firebaseUid: phone,
     phone,
     provider: 'phone',
+    role: Roles.USER,
     ipAddress: ipAddress ?? null,
     referralCode: referralCode ?? null,
   });
@@ -207,22 +203,18 @@ async function handleFirebaseAuth(
     throw AppError.unauthorized('Token was not issued by Apple auth', 'PROVIDER_MISMATCH');
   }
 
+  if ((expectedProvider === 'google' || expectedProvider === 'apple') && requiredRole && requiredRole !== Roles.USER) {
+    throw AppError.forbidden('Google and Apple auth are only allowed for user role', 'SOCIAL_AUTH_ROLE_NOT_ALLOWED');
+  }
+
+  const targetRole = (requiredRole as Roles | undefined) ?? Roles.USER;
+
   if (requiredRole) {
-    // Check if user already exists in DB
-    const existingUser = await userService.findByFirebaseUid(decoded.uid);
+    const existingUser = await userService.findByFirebaseUidForRole(decoded.uid, {
+      role: targetRole,
+    });
 
     if (existingUser) {
-      // User exists — strictly validate role
-      const existingRole = existingUser.role || (existingUser as any).dataValues?.role;
-
-      if (existingRole !== requiredRole) {
-        throw AppError.forbidden(
-          `Access denied: this account is already registered as a ${existingRole}`,
-          'ACCESS_DENIED',
-        );
-      }
-
-      // Role matches — update IP and issue tokens
       await existingUser.update({ ipAddress: ipAddress ?? null });
       await existingUser.reload();
       const tokens = await issueTokenPair(existingUser);
@@ -230,15 +222,15 @@ async function handleFirebaseAuth(
     }
 
     // New user — create with the requiredRole
-    const [newUser] = await userService.upsert({
+    const [newUser] = await userService.upsertForRole({
       firebaseUid: decoded.uid,
       phone: decoded.phone_number ?? null,
       email: decoded.email ?? null,
       provider: expectedProvider,
-      role: requiredRole as any,
+      role: targetRole,
       ipAddress: ipAddress ?? null,
       referralCode: referralCode ?? null,
-      isActive: requiredRole === 'vendor' ? false : true,
+      isActive: targetRole === Roles.VENDOR ? false : true,
     });
 
     const tokens = await issueTokenPair(newUser);
@@ -246,11 +238,12 @@ async function handleFirebaseAuth(
   }
 
   // Generic (customer) flow — no role restriction
-  const [user, isNew] = await userService.upsert({
+  const [user, isNew] = await userService.upsertForRole({
     firebaseUid: decoded.uid,
     phone: decoded.phone_number ?? null,
     email: decoded.email ?? null,
     provider: expectedProvider,
+    role: Roles.USER,
     ipAddress: ipAddress ?? null,
     referralCode: referralCode ?? null,
   });
@@ -261,27 +254,38 @@ async function handleFirebaseAuth(
 }
 
 export async function googleSignIn(idToken: string, ipAddress?: string | null, referralCode?: string | null, requiredRole?: 'admin' | 'vendor' | 'user') {
-  return handleFirebaseAuth(idToken, 'google', ipAddress, referralCode, requiredRole);
+  return handleFirebaseAuth(idToken, 'google', ipAddress, referralCode, requiredRole ?? Roles.USER);
 }
 
 export async function appleSignIn(idToken: string, ipAddress?: string | null, referralCode?: string | null, requiredRole?: 'admin' | 'vendor' | 'user') {
-  return handleFirebaseAuth(idToken, 'apple', ipAddress, referralCode, requiredRole);
+  return handleFirebaseAuth(idToken, 'apple', ipAddress, referralCode, requiredRole ?? Roles.USER);
 }
 
 // ─── Refresh token flow ───────────────────────────────────────────────────────
 
-export async function refreshAccessToken(refreshToken: string): Promise<TokenPair> {
+export async function refreshAccessToken(
+  refreshToken: string,
+): Promise<{ tokens: TokenPair; userId: string; role: Roles }> {
   // 1. Verify the JWT signature and expiry
   const payload = verifyRefreshToken(refreshToken);
+  const role = payload.role as Roles;
 
-  const user = await userService.findById(payload.sub);
+  const user = await userService.findByIdForRole(payload.sub, {
+    role,
+  });
   const isActive = user.isActive ?? (user as any).dataValues?.isActive ?? (user as any).dataValues?.is_active;
 
   if (isActive === false) {
     throw AppError.unauthorized('Account is deactivated', 'ACCOUNT_DEACTIVATED');
   }
 
-  return issueTokenPair(user);
+  const userId = user.id ?? (user as { dataValues?: { id?: string } }).dataValues?.id;
+  if (!userId) {
+    throw AppError.internal('Could not resolve user id from refresh token', 'REFRESH_FAILED');
+  }
+
+  const tokens = await issueTokenPair(user);
+  return { tokens, userId, role };
 }
 
 // ─── Logout ───────────────────────────────────────────────────────────────────

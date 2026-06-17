@@ -17,6 +17,8 @@ import {
   getMyBrandsSchema,
   updateMyBrandsSchema,
   getMyProductsSchema,
+  getMyDashboardSchema,
+  getMyRevenueSchema,
   getStoreBySlugSchema,
 } from './store.schema';
 import { Roles } from '@modules/user/user.model';
@@ -45,6 +47,24 @@ export default async function storeRoutes(fastify: FastifyInstance): Promise<voi
       onRequest: [fastify.authenticate, fastify.requireRole(Roles.VENDOR)],
     },
     storeController.getMyProducts.bind(storeController) as any,
+  );
+
+  fastify.get(
+    '/my/dashboard',
+    {
+      schema: getMyDashboardSchema,
+      onRequest: [fastify.authenticate, fastify.requireRole(Roles.VENDOR)],
+    },
+    storeController.getMyDashboard.bind(storeController) as any,
+  );
+
+  fastify.get(
+    '/my/revenue',
+    {
+      schema: getMyRevenueSchema,
+      onRequest: [fastify.authenticate, fastify.requireRole(Roles.VENDOR)],
+    },
+    storeController.getMyRevenue.bind(storeController) as any,
   );
 
   fastify.get(

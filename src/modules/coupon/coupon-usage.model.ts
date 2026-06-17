@@ -46,7 +46,6 @@ CouponUsage.init(
     orderId: {
       type: DataTypes.UUID,
       allowNull: false,
-      unique: true,
       field: 'order_id',
     },
   },
@@ -57,7 +56,7 @@ CouponUsage.init(
     indexes: [
       { fields: ['coupon_id', 'user_id'] },
       { fields: ['user_id'] },
-      { unique: true, fields: ['order_id'] },
+      { unique: true, fields: ['order_id', 'coupon_id'], name: 'coupon_usages_order_id_coupon_id_unique' },
     ],
   },
 );

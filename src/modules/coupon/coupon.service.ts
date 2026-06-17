@@ -1,6 +1,8 @@
-import { Op, Transaction, Sequelize } from 'sequelize';
+import { Op, Transaction, Sequelize, type WhereOptions } from 'sequelize';
 import sequelize from '@config/database';
 import Order from '@modules/order/order.model';
+import type { DateRange } from '@modules/store/vendorDashboard.utils';
+import { fetchVendorCouponStats, type VendorCouponStats } from './vendorCouponStats';
 import Coupon, {
   CouponAppliesTo,
   CouponCustomerEligibility,
@@ -10,11 +12,12 @@ import Coupon, {
 import CouponUsage from './coupon-usage.model';
 import { AppError } from '@utils/appError';
 import { Roles } from '@modules/user/user.model';
+import { computeMoneyDiscount, stackMoneyDiscounts } from './couponStackMath';
 
 export interface CreateCouponInput {
   code: string;
   type: CouponType;
-  value: number;
+  value?: number;
   minOrderValue?: number;
   maxDiscountCap?: number | null;
   validFrom: string;
@@ -50,6 +53,8 @@ export interface AppliedDiscount {
   discountAmount: number;
 }
 
+export type { VendorCouponStats };
+
 class CouponService {
   // ─── Create ───────────────────────────────────────────────────────────────────
 
@@ -73,7 +78,7 @@ class CouponService {
     const existing = await Coupon.findOne({ where: { code: input.code.toUpperCase() } });
     if (existing) throw AppError.conflict('Coupon code already exists', 'COUPON_CODE_EXISTS');
 
-    if (input.type === 'PERCENTAGE' && (input.value <= 0 || input.value > 100)) {
+    if (input.type === 'PERCENTAGE' && ((input.value ?? 0) <= 0 || (input.value ?? 0) > 100)) {
       throw AppError.badRequest('Percentage value must be between 1 and 100', 'INVALID_COUPON_VALUE');
     }
 
@@ -116,7 +121,7 @@ class CouponService {
     return Coupon.create({
       code: input.code.toUpperCase(),
       type: input.type,
-      value: input.value,
+      value: input.value ?? 0,
       minOrderValue: input.minOrderValue ?? 0,
       maxDiscountCap: input.maxDiscountCap ?? null,
       validFrom: new Date(input.validFrom),
@@ -165,8 +170,9 @@ class CouponService {
       }
     }
 
-    coupon.isActive = !coupon.isActive;
-    await coupon.save();
+    const raw = (coupon as unknown as { dataValues?: Record<string, unknown> }).dataValues ?? {};
+    const currentActive = Boolean(coupon.get('isActive') ?? raw.is_active ?? raw.isActive);
+    await coupon.update({ isActive: !currentActive });
     return coupon;
   }
 
@@ -177,6 +183,80 @@ class CouponService {
     if (!coupon) throw AppError.notFound('Coupon not found', 'COUPON_NOT_FOUND');
 
     return this._validateCoupon(coupon, ctx);
+  }
+
+  /**
+   * Validates multiple coupon codes in order, enforces `isStackable` when len > 1,
+   * at most one FREE_DELIVERY, and combines FLAT/PERCENTAGE sequentially on remaining subtotal.
+   */
+  async validateStack(
+    rawCodes: string[],
+    ctx: CouponValidationContext,
+  ): Promise<{ applied: AppliedDiscount[]; totalDiscount: number; deliveryWaived: boolean }> {
+    const maxCodes = 10;
+    const normalized: string[] = [];
+    const seen = new Set<string>();
+    for (const raw of rawCodes) {
+      if (raw === undefined || raw === null) continue;
+      const code = String(raw).trim().toUpperCase();
+      if (!code) continue;
+      if (seen.has(code)) continue;
+      seen.add(code);
+      normalized.push(code);
+      if (normalized.length > maxCodes) {
+        throw AppError.badRequest(`At most ${maxCodes} coupon codes allowed`, 'COUPON_STACK_LIMIT');
+      }
+    }
+
+    if (normalized.length === 0) {
+      throw AppError.badRequest('At least one coupon code is required', 'COUPON_CODE_REQUIRED');
+    }
+
+    const coupons: Coupon[] = [];
+    for (const code of normalized) {
+      const coupon = await Coupon.findOne({ where: { code } });
+      if (!coupon) throw AppError.notFound(`Coupon not found: ${code}`, 'COUPON_NOT_FOUND');
+      await this._validateCoupon(coupon, ctx);
+      coupons.push(coupon);
+    }
+
+    if (coupons.length > 1) {
+      for (const c of coupons) {
+        if (!c.isStackable) {
+          throw AppError.badRequest(
+            `Coupon ${c.code} cannot be combined with other coupons`,
+            'COUPON_NOT_STACKABLE',
+          );
+        }
+      }
+    }
+
+    if (coupons.filter((c) => c.type === 'FREE_DELIVERY').length > 1) {
+      throw AppError.badRequest(
+        'Only one free delivery coupon may be applied per order',
+        'COUPON_FREE_DELIVERY_DUPLICATE',
+      );
+    }
+
+    const { lineDiscounts, totalDiscount } = stackMoneyDiscounts(
+      coupons.map((c) => ({
+        type: c.type,
+        value: Number(c.value),
+        maxDiscountCap: c.maxDiscountCap !== null ? Number(c.maxDiscountCap) : null,
+      })),
+      ctx.subtotal,
+    );
+
+    const applied: AppliedDiscount[] = [];
+    let deliveryWaived = false;
+
+    for (let i = 0; i < coupons.length; i++) {
+      const coupon = coupons[i]!;
+      if (coupon.type === 'FREE_DELIVERY') deliveryWaived = true;
+      applied.push({ coupon, discountAmount: lineDiscounts[i] ?? 0 });
+    }
+
+    return { applied, totalDiscount, deliveryWaived };
   }
 
   // ─── Internal validation (reused for auto-apply) ──────────────────────────────
@@ -275,26 +355,12 @@ class CouponService {
   // ─── Calculate discount amount ────────────────────────────────────────────────
 
   private _calculateDiscount(coupon: Coupon, subtotal: number): number {
-    const value = Number(coupon.value);
-
-    if (coupon.type === 'FLAT') {
-      return parseFloat(Math.min(value, subtotal).toFixed(2));
-    }
-
-    if (coupon.type === 'PERCENTAGE') {
-      let discount = parseFloat(((subtotal * value) / 100).toFixed(2));
-      if (coupon.maxDiscountCap !== null) {
-        discount = Math.min(discount, Number(coupon.maxDiscountCap));
-      }
-      return discount;
-    }
-
-    if (coupon.type === 'FREE_DELIVERY') {
-      // Delivery charge discount is handled separately in OrderService
-      return 0;
-    }
-
-    return 0;
+    return computeMoneyDiscount(
+      coupon.type,
+      Number(coupon.value),
+      coupon.maxDiscountCap !== null ? Number(coupon.maxDiscountCap) : null,
+      subtotal,
+    );
   }
 
   // ─── Auto-apply best coupon ───────────────────────────────────────────────────
@@ -358,16 +424,25 @@ class CouponService {
 
   // ─── List ─────────────────────────────────────────────────────────────────────
 
+  async getVendorCouponStats(storeId: string, range?: DateRange): Promise<VendorCouponStats> {
+    return fetchVendorCouponStats(storeId, range);
+  }
+
   async listVendorCoupons(
     storeId: string,
-    pagination: { page?: number; limit?: number } = {},
+    filters: { page?: number; limit?: number; isActive?: boolean } = {},
   ) {
-    const page = Math.max(1, pagination.page ?? 1);
-    const limit = Math.min(100, Math.max(1, pagination.limit ?? 20));
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
     const offset = (page - 1) * limit;
 
+    const where: Record<string, unknown> = { storeId };
+    if (filters.isActive !== undefined) {
+      where.isActive = filters.isActive;
+    }
+
     const { count, rows } = await Coupon.findAndCountAll({
-      where: { storeId },
+      where,
       order: [['createdAt', 'DESC']],
       limit,
       offset,
@@ -390,38 +465,56 @@ class CouponService {
   }
 
   async list(
-    filters: { storeId?: string; isApproved?: boolean; isActive?: boolean; readyToUse?: boolean; userId?: string; page?: number; limit?: number } = {},
+    filters: {
+      storeId?: string;
+      includeGlobal?: boolean;
+      isApproved?: boolean;
+      isActive?: boolean;
+      readyToUse?: boolean;
+      userId?: string;
+      page?: number;
+      limit?: number;
+    } = {},
   ) {
-    const where: Record<string, unknown> = {};
-    if (filters.storeId !== undefined) where.storeId = filters.storeId;
-    if (filters.isApproved !== undefined) where.isApproved = filters.isApproved;
-    if (filters.isActive !== undefined) where.isActive = filters.isActive;
-    if (filters.readyToUse !== undefined) where.readyToUse = filters.readyToUse;
+    const storeScope: WhereOptions =
+      filters.storeId !== undefined
+        ? filters.includeGlobal
+          ? { [Op.or]: [{ storeId: null }, { storeId: filters.storeId }] }
+          : { storeId: filters.storeId }
+        : filters.includeGlobal
+          ? { storeId: null }
+          : {};
+
+    const userAndConditions: WhereOptions[] = [];
 
     if (filters.userId) {
       const deliveredCount = await Order.count({
         where: { userId: filters.userId, status: 'delivered' },
       });
 
-      const andConditions: unknown[] = [];
-
       if (deliveredCount >= 1) {
-        andConditions.push({
+        userAndConditions.push({
           isFirstOrderOnly: false,
           customerEligibility: { [Op.ne]: 'first_order_only' },
         });
       }
 
       const escapedUserId = sequelize.escape(filters.userId);
-      andConditions.push(
+      userAndConditions.push(
         Sequelize.literal(
           `NOT ("Coupon"."usage_limit_per_user" IS NOT NULL AND ` +
-          `(SELECT COUNT(*) FROM "coupon_usages" WHERE "coupon_id" = "Coupon"."id" AND "user_id" = ${escapedUserId}) >= "Coupon"."usage_limit_per_user")`,
-        ),
+            `(SELECT COUNT(*) FROM "coupon_usages" WHERE "coupon_id" = "Coupon"."id" AND "user_id" = ${escapedUserId}) >= "Coupon"."usage_limit_per_user")`,
+        ) as unknown as WhereOptions,
       );
-
-      (where as any)[Op.and] = andConditions;
     }
+
+    const where: WhereOptions = {
+      ...storeScope,
+      ...(filters.isApproved !== undefined ? { isApproved: filters.isApproved } : {}),
+      ...(filters.isActive !== undefined ? { isActive: filters.isActive } : {}),
+      ...(filters.readyToUse !== undefined ? { readyToUse: filters.readyToUse } : {}),
+      ...(userAndConditions.length > 0 ? { [Op.and]: userAndConditions } : {}),
+    };
 
     const page = Math.max(1, filters.page ?? 1);
     const limit = Math.min(100, Math.max(1, filters.limit ?? 20));

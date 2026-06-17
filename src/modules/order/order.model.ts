@@ -4,21 +4,26 @@ import sequelize from '@config/database';
 export type OrderStatus =
   | 'pending'
   | 'confirmed'
-  | 'processing'
-  | 'shipped'
+  | 'rider_assigned'
+  | 'at_store'
+  | 'picked_up'
+  | 'out_for_delivery'
   | 'delivered'
-  | 'cancelled';
+  | 'cancelled'
+  | 'returned';
 
 export type DeliveryType = 'delivery' | 'pickup';
 
 export interface OrderAttributes {
   id: string;
+  orderId: string;
   userId: string;
   addressId: string | null;
   status: OrderStatus;
   deliveryType: DeliveryType;
   subtotal: number;
   taxAmount: number;
+  platformFee: number;
   deliveryCharge: number;
   totalAmount: number;
   notes: string | null;
@@ -26,21 +31,54 @@ export interface OrderAttributes {
   discountAmount: number;
   couponCode: string | null;
   metadata: object | null;
+  shadowfaxOrderId: number | null;
+  shadowfaxTrackingUrl: string | null;
+  deliveryPartner: string;
+  deliveredAt: Date | null;
+  cancelledAt: Date | null;
+  returnedAt: Date | null;
+  riderId: number | null;
+  riderName: string | null;
+  riderPhone: string | null;
+  deliveryMetadata: object | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export interface OrderCreationAttributes
-  extends Optional<OrderAttributes, 'id' | 'addressId' | 'notes' | 'originalBasePrice' | 'discountAmount' | 'couponCode' | 'metadata'> {}
+  extends Optional<
+    OrderAttributes,
+    | 'id'
+    | 'orderId'
+    | 'addressId'
+    | 'notes'
+    | 'originalBasePrice'
+    | 'discountAmount'
+    | 'couponCode'
+    | 'metadata'
+    | 'platformFee'
+    | 'shadowfaxOrderId'
+    | 'shadowfaxTrackingUrl'
+    | 'deliveryPartner'
+    | 'deliveredAt'
+    | 'cancelledAt'
+    | 'returnedAt'
+    | 'riderId'
+    | 'riderName'
+    | 'riderPhone'
+    | 'deliveryMetadata'
+  > {}
 
 class Order extends Model<OrderAttributes, OrderCreationAttributes> implements OrderAttributes {
   declare id: string;
+  declare orderId: string;
   declare userId: string;
   declare addressId: string | null;
   declare status: OrderStatus;
   declare deliveryType: DeliveryType;
   declare subtotal: number;
   declare taxAmount: number;
+  declare platformFee: number;
   declare deliveryCharge: number;
   declare totalAmount: number;
   declare notes: string | null;
@@ -48,18 +86,30 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
   declare discountAmount: number;
   declare couponCode: string | null;
   declare metadata: object | null;
+  declare shadowfaxOrderId: number | null;
+  declare shadowfaxTrackingUrl: string | null;
+  declare deliveryPartner: string;
+  declare deliveredAt: Date | null;
+  declare cancelledAt: Date | null;
+  declare returnedAt: Date | null;
+  declare riderId: number | null;
+  declare riderName: string | null;
+  declare riderPhone: string | null;
+  declare deliveryMetadata: object | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
-  toPublicJSON(): any {
+  toPublicJSON(): Record<string, unknown> {
     return {
       id: this.id,
+      orderId: this.orderId,
       userId: this.userId,
       addressId: this.addressId ?? null,
       status: this.status,
       deliveryType: this.deliveryType,
       subtotal: Number(this.subtotal),
       taxAmount: Number(this.taxAmount),
+      platformFee: Number(this.platformFee),
       deliveryCharge: Number(this.deliveryCharge),
       totalAmount: Number(this.totalAmount),
       notes: this.notes ?? null,
@@ -67,10 +117,27 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
       discountAmount: Number(this.discountAmount),
       couponCode: this.couponCode ?? null,
       metadata: this.metadata ?? null,
+      shadowfaxOrderId: this.shadowfaxOrderId != null ? Number(this.shadowfaxOrderId) : null,
+      shadowfaxTrackingUrl: this.shadowfaxTrackingUrl ?? null,
+      deliveryPartner: this.deliveryPartner,
+      deliveredAt: this.deliveredAt?.toISOString?.() ?? null,
+      cancelledAt: this.cancelledAt?.toISOString?.() ?? null,
+      returnedAt: this.returnedAt?.toISOString?.() ?? null,
+      riderId: this.riderId != null ? Number(this.riderId) : null,
+      riderName: this.riderName ?? null,
+      riderPhone: this.riderPhone ?? null,
+      deliveryMetadata: this.deliveryMetadata ?? null,
       createdAt: this.createdAt?.toISOString?.() ?? null,
       updatedAt: this.updatedAt?.toISOString?.() ?? null,
     };
   }
+}
+
+function generateOrderIdCode(): string {
+  const now = new Date();
+  const epochPart = Date.now().toString(36).toUpperCase().slice(-6).padStart(6, '0');
+  const msPart = String(now.getMilliseconds()).padStart(3, '0');
+  return `FI${epochPart}${msPart}0`;
 }
 
 Order.init(
@@ -80,6 +147,12 @@ Order.init(
       defaultValue: DataTypes.UUIDV4,
       primaryKey: true,
       allowNull: false,
+    },
+    orderId: {
+      type: DataTypes.STRING(12),
+      allowNull: false,
+      unique: true,
+      field: 'order_id',
     },
     userId: {
       type: DataTypes.UUID,
@@ -92,7 +165,7 @@ Order.init(
       field: 'address_id',
     },
     status: {
-      type: DataTypes.ENUM('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'),
+      type: DataTypes.STRING(50),
       allowNull: false,
       defaultValue: 'pending',
     },
@@ -109,6 +182,12 @@ Order.init(
       type: DataTypes.DECIMAL(12, 2),
       allowNull: false,
       field: 'tax_amount',
+    },
+    platformFee: {
+      type: DataTypes.DECIMAL(12, 2),
+      allowNull: false,
+      defaultValue: 0,
+      field: 'platform_fee',
     },
     deliveryCharge: {
       type: DataTypes.DECIMAL(10, 2),
@@ -137,7 +216,7 @@ Order.init(
       field: 'discount_amount',
     },
     couponCode: {
-      type: DataTypes.STRING(50),
+      type: DataTypes.STRING(255),
       allowNull: true,
       field: 'coupon_code',
     },
@@ -145,15 +224,75 @@ Order.init(
       type: DataTypes.JSONB,
       allowNull: true,
     },
+    shadowfaxOrderId: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      field: 'shadowfax_order_id',
+    },
+    shadowfaxTrackingUrl: {
+      type: DataTypes.TEXT,
+      allowNull: true,
+      field: 'shadowfax_tracking_url',
+    },
+    deliveryPartner: {
+      type: DataTypes.STRING(50),
+      allowNull: false,
+      defaultValue: 'SHADOWFAX',
+      field: 'delivery_partner',
+    },
+    deliveredAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'delivered_at',
+    },
+    cancelledAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'cancelled_at',
+    },
+    returnedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'returned_at',
+    },
+    riderId: {
+      type: DataTypes.BIGINT,
+      allowNull: true,
+      field: 'rider_id',
+    },
+    riderName: {
+      type: DataTypes.STRING(255),
+      allowNull: true,
+      field: 'rider_name',
+    },
+    riderPhone: {
+      type: DataTypes.STRING(50),
+      allowNull: true,
+      field: 'rider_phone',
+    },
+    deliveryMetadata: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      field: 'delivery_metadata',
+    },
   },
   {
     sequelize,
     tableName: 'orders',
     underscored: false,
+    hooks: {
+      beforeValidate: (order: Order) => {
+        if (!order.orderId) {
+          order.orderId = generateOrderIdCode();
+        }
+      },
+    },
     indexes: [
+      { unique: true, fields: ['order_id'] },
       { fields: ['user_id'] },
       { fields: ['status'] },
       { fields: ['delivery_type'] },
+      { fields: ['shadowfax_order_id'] },
     ],
   },
 );

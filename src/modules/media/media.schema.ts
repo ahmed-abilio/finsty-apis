@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Upload folder enum ───────────────────────────────────────────────────────
 
 export type UploadFolder =
@@ -133,17 +135,7 @@ export const presignedUploadSchema: FastifySchema = {
         },
       },
     },
-    400: {
-      description: 'Unsupported MIME type for the selected folder, or invalid parameters',
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        error: {
-          type: 'object',
-          properties: { code: { type: 'string' }, message: { type: 'string' } },
-        },
-      },
-    },
+    400: validationErrorResponse,
     401: {
       description: 'Unauthorized',
       type: 'object',
@@ -191,17 +183,7 @@ export const deleteMediaSchema: FastifySchema = {
         },
       },
     },
-    400: {
-      description: 'Invalid key or key does not belong to this user',
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        error: {
-          type: 'object',
-          properties: { code: { type: 'string' }, message: { type: 'string' } },
-        },
-      },
-    },
+    400: validationErrorResponse,
     401: {
       description: 'Unauthorized',
       type: 'object',

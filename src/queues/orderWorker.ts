@@ -7,9 +7,30 @@ import OrderItem from '@modules/order/order-item.model';
 import PendingOrder from '@modules/order/pending-order.model';
 
 import ProductVariant from '@modules/product/product-variant.model';
+import { syncProductStockFromVariants } from '@modules/product/productStock.util';
 import CouponUsage from '@modules/coupon/coupon-usage.model';
-import { OrderJobData, ORDER_QUEUE_NAME } from './orderQueue';
+import { OrderJobData, ORDER_QUEUE_NAME, type OrderPricingSnapshot, type ResolvedCouponLine } from './orderQueue';
 import logger from '@utils/logger';
+
+function resolvedCouponsForWorker(pricing: OrderPricingSnapshot): ResolvedCouponLine[] {
+  if (pricing.resolvedCoupons && pricing.resolvedCoupons.length > 0) {
+    return pricing.resolvedCoupons;
+  }
+  const legacy = pricing as unknown as {
+    resolvedCouponId?: string | null;
+    resolvedCouponCode?: string | null;
+  };
+  if (legacy.resolvedCouponId && legacy.resolvedCouponCode) {
+    return [
+      {
+        id: legacy.resolvedCouponId,
+        code: legacy.resolvedCouponCode,
+        discountAmount: Number(pricing.discountAmount ?? 0),
+      },
+    ];
+  }
+  return [];
+}
 
 // ─── Business-logic error codes that must NOT be retried ─────────────────────
 
@@ -19,6 +40,25 @@ const NON_RETRYABLE_CODES = new Set([
   'ADDRESS_NOT_FOUND',
   'EMPTY_CART',
 ]);
+
+const ORDER_ID_MAX_RETRIES = 10;
+
+function generatePublicOrderId(attempt = 0): string {
+  const now = new Date();
+  const epochPart = Date.now().toString(36).toUpperCase().slice(-6).padStart(6, '0');
+  const msPart = String(now.getMilliseconds()).padStart(3, '0');
+  const retryPart = Math.min(attempt, 35).toString(36).toUpperCase();
+  return `FI${epochPart}${msPart}${retryPart}`;
+}
+
+function isOrderIdUniqueViolation(err: unknown): boolean {
+  const sequelizeError = err as { name?: string; original?: { code?: string; constraint?: string } };
+  return (
+    sequelizeError?.name === 'SequelizeUniqueConstraintError' &&
+    sequelizeError?.original?.code === '23505' &&
+    sequelizeError?.original?.constraint === 'orders_order_id_key'
+  );
+}
 
 // ─── Processor ───────────────────────────────────────────────────────────────
 
@@ -86,25 +126,76 @@ async function processCreateOrder(job: Job<OrderJobData>): Promise<void> {
       await variant.update({ stock: variant.stock - item.quantity }, { transaction: t });
     }
 
-    // ── 4. Create the Order row ───────────────────────────────────────────────
-    const order = await Order.create(
-      {
-        userId,
-        addressId: addressId ?? null,
-        status: 'pending',
-        deliveryType,
-        subtotal: pricing.subtotal,
-        taxAmount: pricing.taxAmount,
-        deliveryCharge: pricing.deliveryCharge,
-        totalAmount: pricing.totalAmount,
-        notes: notes ?? null,
-        originalBasePrice: pricing.subtotal,
-        discountAmount: pricing.discountAmount,
-        couponCode: pricing.resolvedCouponCode,
-        metadata: { cartItemIds: pricing.cartItemIds },
-      },
-      { transaction: t },
+    const stockedProductIds = [
+      ...new Set(pricing.orderItems.map((item) => item.productId).filter(Boolean)),
+    ];
+    for (const productId of stockedProductIds) {
+      await syncProductStockFromVariants(productId, t);
+    }
+
+    // True pre-discount, pre-variant-adjustment total — what the catalogue lists
+    // before any promotion or variant surcharge is applied.
+    const originalBasePrice = parseFloat(
+      pricing.orderItems
+        .reduce((acc, item) => acc + Number(item.baseTotal ?? 0), 0)
+        .toFixed(2),
     );
+
+    const resolvedCoupons = resolvedCouponsForWorker(pricing);
+
+    // ── 4. Create the Order row ───────────────────────────────────────────────
+    let order: Order | null = null;
+    for (let attempt = 1; attempt <= ORDER_ID_MAX_RETRIES; attempt += 1) {
+      try {
+        order = await Order.create(
+          {
+            orderId: generatePublicOrderId(attempt - 1),
+            userId,
+            addressId: addressId ?? null,
+            status: 'pending',
+            deliveryType,
+            subtotal: pricing.subtotal,
+            taxAmount: pricing.taxAmount,
+            platformFee: pricing.platformFee ?? 0,
+            deliveryCharge: pricing.deliveryCharge,
+            totalAmount: pricing.totalAmount,
+            notes: notes ?? null,
+            originalBasePrice,
+            discountAmount: pricing.discountAmount,
+            couponCode:
+              resolvedCoupons.length > 0
+                ? resolvedCoupons
+                    .map((c) => c.code)
+                    .join(',')
+                    .slice(0, 255) || null
+                : null,
+            metadata: {
+              cartItemIds: pricing.cartItemIds,
+              ...(pricing.shadowfaxReplay ? { shadowfaxReplay: pricing.shadowfaxReplay } : {}),
+              ...(resolvedCoupons.length > 0
+                ? {
+                    appliedCoupons: resolvedCoupons.map((c) => ({
+                      couponId: c.id,
+                      code: c.code,
+                      discountAmount: c.discountAmount,
+                    })),
+                  }
+                : {}),
+            },
+          },
+          { transaction: t },
+        );
+        break;
+      } catch (err) {
+        if (!isOrderIdUniqueViolation(err) || attempt === ORDER_ID_MAX_RETRIES) {
+          throw err;
+        }
+      }
+    }
+
+    if (!order) {
+      throw new Error('Failed to generate a unique order ID');
+    }
 
     // ── 5. Bulk-create order items (snapshot of product/variant details) ──────
     const orderItemData = pricing.orderItems.map((item) => ({
@@ -113,6 +204,11 @@ async function processCreateOrder(job: Job<OrderJobData>): Promise<void> {
       variantId: item.variantId ?? null,
       productName: item.productName,
       variantLabel: item.variantLabel ?? null,
+      basePrice: item.basePrice,
+      discountPercent: item.discountPercent,
+      discountAmount: item.discountAmount,
+      discountedBasePrice: item.discountedBasePrice,
+      additionalPrice: item.additionalPrice,
       unitPrice: item.unitPrice,
       quantity: item.quantity,
       totalPrice: item.totalPrice,
@@ -121,9 +217,13 @@ async function processCreateOrder(job: Job<OrderJobData>): Promise<void> {
     await OrderItem.bulkCreate(orderItemData, { transaction: t });
 
     // ── 6. Record coupon usage ────────────────────────────────────────────────
-    if (pricing.resolvedCouponId && pricing.resolvedCouponCode) {
-      await CouponUsage.create(
-        { couponId: pricing.resolvedCouponId, userId, orderId: order.id },
+    if (resolvedCoupons.length > 0) {
+      await CouponUsage.bulkCreate(
+        resolvedCoupons.map((c) => ({
+          couponId: c.id,
+          userId,
+          orderId: order.id,
+        })),
         { transaction: t },
       );
     }

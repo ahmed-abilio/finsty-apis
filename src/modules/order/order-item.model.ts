@@ -8,6 +8,11 @@ export interface OrderItemAttributes {
   variantId: string | null;
   productName: string;
   variantLabel: string | null;
+  basePrice: number | null;
+  discountPercent: number | null;
+  discountAmount: number | null;
+  discountedBasePrice: number | null;
+  additionalPrice: number | null;
   unitPrice: number;
   quantity: number;
   totalPrice: number;
@@ -16,7 +21,17 @@ export interface OrderItemAttributes {
 }
 
 export interface OrderItemCreationAttributes
-  extends Optional<OrderItemAttributes, 'id' | 'variantId' | 'variantLabel'> {}
+  extends Optional<
+    OrderItemAttributes,
+    | 'id'
+    | 'variantId'
+    | 'variantLabel'
+    | 'basePrice'
+    | 'discountPercent'
+    | 'discountAmount'
+    | 'discountedBasePrice'
+    | 'additionalPrice'
+  > {}
 
 class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes>
   implements OrderItemAttributes {
@@ -26,6 +41,11 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes>
   declare variantId: string | null;
   declare productName: string;
   declare variantLabel: string | null;
+  declare basePrice: number | null;
+  declare discountPercent: number | null;
+  declare discountAmount: number | null;
+  declare discountedBasePrice: number | null;
+  declare additionalPrice: number | null;
   declare unitPrice: number;
   declare quantity: number;
   declare totalPrice: number;
@@ -33,6 +53,9 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes>
   declare readonly updatedAt: Date;
 
   toPublicJSON(): any {
+    const num = (val: number | null | undefined) =>
+      val === null || val === undefined ? null : Number(val);
+
     return {
       id: this.id,
       orderId: this.orderId,
@@ -40,6 +63,11 @@ class OrderItem extends Model<OrderItemAttributes, OrderItemCreationAttributes>
       variantId: this.variantId ?? null,
       productName: this.productName,
       variantLabel: this.variantLabel ?? null,
+      basePrice: num(this.basePrice),
+      discountPercent: num(this.discountPercent),
+      discountAmount: num(this.discountAmount),
+      discountedBasePrice: num(this.discountedBasePrice),
+      additionalPrice: num(this.additionalPrice),
       unitPrice: Number(this.unitPrice),
       quantity: this.quantity,
       totalPrice: Number(this.totalPrice),
@@ -79,6 +107,31 @@ OrderItem.init(
       type: DataTypes.STRING(100),
       allowNull: true,
       field: 'variant_label',
+    },
+    basePrice: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      field: 'base_price',
+    },
+    discountPercent: {
+      type: DataTypes.DECIMAL(5, 2),
+      allowNull: true,
+      field: 'discount_percent',
+    },
+    discountAmount: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      field: 'discount_amount',
+    },
+    discountedBasePrice: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      field: 'discounted_base_price',
+    },
+    additionalPrice: {
+      type: DataTypes.DECIMAL(10, 2),
+      allowNull: true,
+      field: 'additional_price',
     },
     unitPrice: {
       type: DataTypes.DECIMAL(10, 2),

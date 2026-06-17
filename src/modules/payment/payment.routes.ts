@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import paymentController from './payment.controller';
 import {
   initiatePaymentSchema,
+  cancelIncompletePaymentSchema,
   capturePaymentSchema,
   requestRefundSchema,
   getPaymentSchema,
@@ -27,6 +28,12 @@ export default async function paymentRoutes(fastify: FastifyInstance): Promise<v
     '/capture',
     { schema: capturePaymentSchema },
     (request, reply) => paymentController.capturePayment(request as any, reply),
+  );
+
+  fastify.post(
+    '/cancel-incomplete',
+    { schema: cancelIncompletePaymentSchema },
+    (request, reply) => paymentController.cancelIncompletePayment(request as any, reply),
   );
 
   fastify.post(

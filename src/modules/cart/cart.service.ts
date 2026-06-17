@@ -4,8 +4,14 @@ import CartItem from './cart-item.model';
 import Product from '@modules/product/product.model';
 import ProductVariant from '@modules/product/product-variant.model';
 import ProductImage from '@modules/product/product-image.model';
+import ProductColor from '@modules/product/product-color.model';
+import ProductColorImage from '@modules/product/product-color-image.model';
 import { AppError } from '@utils/appError';
 import { Store } from '@config/associations';
+import { computeLineItemPrice } from './pricing';
+import { computeTaxOnSubtotal, getPlatformFee, getTaxRate } from '@config/pricing.config';
+import { getPublicDeliveryConfig } from '@config/delivery.config';
+import { resolveDeliveryQuote } from '@modules/delivery/deliveryQuote.service';
 
 const INCLUDE_CART_ITEMS: IncludeOptions[] = [
   {
@@ -17,20 +23,47 @@ const INCLUDE_CART_ITEMS: IncludeOptions[] = [
         as: 'product',
         include: [
           {
+            // `separate: true` is required: limit/order on a hasMany include
+            // collapses the outer query and returns at most ONE image total
+            // across all cart items without it.
             model: ProductImage,
             as: 'images',
+            separate: true,
             order: [['position', 'ASC']] as [string, string][],
             limit: 1,
           },
           {
-            model:Store,
-            as:'store',
-             attributes: ['id', 'name'],
-             required: false,
-          }
+            model: Store,
+            as: 'store',
+            attributes: ['id', 'name', 'latitude', 'longitude'],
+            required: false,
+          },
         ],
       },
-      { model: ProductVariant, as: 'variant', required: false },
+      {
+        model: ProductVariant,
+        as: 'variant',
+        required: false,
+        include: [
+          {
+            model: ProductColor,
+            as: 'color',
+            // `id` is required: `separate: true` on nested images issues WHERE color_id IN (...)
+            // using parent PKs; omitting `id` leaves them undefined and breaks the query.
+            attributes: ['id', 'colorName', 'colorHex'],
+            required: false,
+            include: [
+              {
+                model: ProductColorImage,
+                as: 'images',
+                separate: true,
+                order: [['displayOrder', 'ASC']] as [string, string][],
+                limit: 1,
+              },
+            ],
+          },
+        ],
+      },
     ],
   },
 ];
@@ -56,7 +89,17 @@ class CartService {
   async getCart(userId: string, page = 1, limit = 10, storeId?: string) {
     const cart = await Cart.findOne({ where: { userId }, include: INCLUDE_CART_ITEMS });
     if (!cart) {
-      return { items: [], subtotal: 0, itemCount: 0, totalItems: 0, pagination: { page, limit, total: 0, totalPages: 0, hasNextPage: false } };
+      return {
+        items: [],
+        subtotal: 0,
+        taxRate: getTaxRate(),
+        taxAmount: 0,
+        platformFee: 0,
+        itemCount: 0,
+        totalItems: 0,
+        deliveryConfig: getPublicDeliveryConfig(),
+        pagination: { page, limit, total: 0, totalPages: 0, hasNextPage: false },
+      };
     }
 
     const formatted = this.formatCart(cart, storeId);
@@ -150,7 +193,17 @@ class CartService {
   async clearCart(userId: string) {
     const cart = await Cart.findOne({ where: { userId } });
     if (cart) await CartItem.destroy({ where: { cartId: cart.id } });
-    return { items: [], subtotal: 0, itemCount: 0 };
+    return {
+      items: [],
+      subtotal: 0,
+      taxRate: getTaxRate(),
+      taxAmount: 0,
+      platformFee: 0,
+      itemCount: 0,
+      totalItems: 0,
+      deliveryConfig: getPublicDeliveryConfig(),
+      pagination: { page: 1, limit: 10, total: 0, totalPages: 0, hasNextPage: false },
+    };
   }
 
   formatCart(cart: Cart, storeId?: string) {
@@ -175,23 +228,61 @@ class CartService {
         (i) => i.toPublicJSON(),
       );
 
-      const basePrice = Number(product.basePrice);
-      const discountPercent = Number(product.discountPercent);
-      const additionalPrice = variant ? Number(variant.additionalPrice) : 0;
-      const unitPrice = parseFloat(
-        (basePrice * (1 - discountPercent / 100) + additionalPrice).toFixed(2),
-      );
-      const itemTotal = parseFloat((unitPrice * item.quantity).toFixed(2));
+      const pricing = computeLineItemPrice(product, variant, item.quantity);
 
       totalItems += item.quantity;
 
       // Only selected items count toward the checkout subtotal
       if (item.isSelected) {
-        subtotal += itemTotal;
+        subtotal += pricing.itemTotal;
         itemCount += item.quantity;
       }
 
-      const store = (product as unknown as { store: { id: string; name: string } | null }).store ?? null;
+      const storeRaw = (product as unknown as { store: Store | null }).store ?? null;
+      const store = storeRaw
+        ? {
+            id: storeRaw.id,
+            name: storeRaw.name,
+            latitude: Number(storeRaw.latitude),
+            longitude: Number(storeRaw.longitude),
+          }
+        : null;
+      const categoryId = product.categoryId ?? null;
+      const subCategoryId = product.subCategoryId ?? null;
+      const variantColor = variant
+        ? ((variant as unknown as { color?: ProductColor | null }).color ?? null)
+        : null;
+
+      let variantImageUrl: string | null = null;
+      let variantImage: ReturnType<ProductColorImage['toPublicJSON']> | null = null;
+      if (variant) {
+        const colorImages =
+          (variant as unknown as { color?: { images?: ProductColorImage[] } }).color?.images ?? [];
+        if (colorImages.length > 0) {
+          const sorted = [...colorImages].sort(
+            (a, b) => Number(a.displayOrder) - Number(b.displayOrder),
+          );
+          const first = sorted[0];
+          variantImageUrl = first.imageUrl ? String(first.imageUrl) : null;
+          variantImage = first.toPublicJSON();
+        } else if (images.length > 0 && images[0].url) {
+          variantImageUrl = String(images[0].url);
+        }
+      }
+
+      const variantJson = variant
+        ? {
+            ...variant.toPublicJSON(),
+            imageUrl: variantImageUrl,
+            image: variantImage,
+            color: variantColor?.colorName ?? null,
+            colorHex: variantColor?.colorHex ?? null,
+          }
+        : null;
+
+      const productJson = product.toPublicJSON();
+      const discountStartDate = productJson.discountStartDate ?? null;
+      const discountEndDate = productJson.discountEndDate ?? null;
 
       return {
         id: item.id,
@@ -199,18 +290,42 @@ class CartService {
         variantId: item.variantId ?? null,
         quantity: item.quantity,
         isSelected: item.isSelected,
-        product: { ...product.toPublicJSON(), images, store },
-        variant: variant ? variant.toPublicJSON() : null,
-        unitPrice,
-        itemTotal,
+        product: {
+          ...productJson,
+          discountStartDate,
+          discountEndDate,
+          images,
+          store,
+          category: categoryId ? { id: categoryId } : null,
+          subcategory: subCategoryId ? { id: subCategoryId } : null,
+        },
+        variant: variantJson,
+        basePrice: pricing.basePrice,
+        discountPercent: pricing.discountPercent,
+        discountStartDate,
+        discountEndDate,
+        discountAmount: pricing.discountAmount,
+        discountedBasePrice: pricing.discountedBasePrice,
+        additionalPrice: pricing.additionalPrice,
+        unitPrice: pricing.unitPrice,
+        itemTotal: pricing.itemTotal,
+        baseTotal: pricing.baseTotal,
       };
     });
 
+    const subtotalRounded = parseFloat(subtotal.toFixed(2));
+    const taxRate = getTaxRate();
+    const taxAmount = computeTaxOnSubtotal(subtotalRounded);
+    const platformFee = getPlatformFee();
     return {
       items: formattedItems,
-      subtotal: parseFloat(subtotal.toFixed(2)),
+      subtotal: subtotalRounded,
+      taxRate,
+      taxAmount,
+      platformFee,
       itemCount,
       totalItems,
+      deliveryConfig: getPublicDeliveryConfig(),
     };
   }
 
@@ -242,12 +357,34 @@ class CartService {
               {
                 model: ProductImage,
                 as: 'images',
+                separate: true,
                 order: [['position', 'ASC']] as [string, string][],
                 limit: 1,
               },
             ],
           },
-          { model: ProductVariant, as: 'variant', required: false },
+          {
+            model: ProductVariant,
+            as: 'variant',
+            required: false,
+            include: [
+              {
+                model: ProductColor,
+                as: 'color',
+                attributes: ['id', 'colorName', 'colorHex'],
+                required: false,
+                include: [
+                  {
+                    model: ProductColorImage,
+                    as: 'images',
+                    separate: true,
+                    order: [['displayOrder', 'ASC']] as [string, string][],
+                    limit: 1,
+                  },
+                ],
+              },
+            ],
+          },
         ],
       },
     ];
@@ -270,6 +407,30 @@ class CartService {
     }
 
     return { cart, formatted: this.formatCart(cart) };
+  }
+
+  /**
+   * Live Shadowfax delivery quote for checkout using the user's default address
+   * (or optional `addressId`) and selected cart items from a single store.
+   */
+  async getDeliveryQuote(userId: string, addressId?: string) {
+    const cartData = await this.getCartForOrder(userId);
+    if (!cartData) throw AppError.badRequest('Cart is empty', 'EMPTY_CART');
+
+    const { cart, formatted } = cartData;
+    const firstItem = formatted.items[0] as { product?: { storeId?: string } } | undefined;
+    const storeId = firstItem?.product?.storeId;
+    if (!storeId) {
+      throw AppError.badRequest('Could not resolve store for delivery quote', 'STORE_NOT_FOUND');
+    }
+
+    return resolveDeliveryQuote({
+      userId,
+      subtotal: formatted.subtotal,
+      storeId,
+      addressId,
+      cartId: cart.id,
+    });
   }
 }
 

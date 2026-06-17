@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 const addressObject = {
   type: 'object',
   properties: {
@@ -62,7 +64,12 @@ const notFound = {
 
 export const listAddressesSchema: FastifySchema = {
   tags: ['Addresses'],
-  summary: 'List all addresses for the authenticated user',
+  summary: 'List all addresses for the authenticated user (default first)',
+  description:
+    'Returns all saved addresses for the authenticated user. The `addresses` array is ordered with the ' +
+    'default address first (`isDefault: true`, backed by `is_default` in the database), then remaining ' +
+    'addresses by oldest `createdAt` first. To use an address for checkout/delivery, set it as default via ' +
+    '`PATCH /addresses/:addressId/default`.',
   security: [{ BearerAuth: [] }],
   response: {
     200: {
@@ -94,7 +101,7 @@ export const createAddressSchema: FastifySchema = {
         data: { type: 'object', properties: { address: addressObject } },
       },
     },
-    400: notFound,
+    400: validationErrorResponse,
     401: unauthorized,
   },
 };

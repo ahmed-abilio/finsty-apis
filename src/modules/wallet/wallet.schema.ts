@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 const unauthorized = {
   type: 'object',
   properties: {
@@ -166,7 +168,7 @@ export const initiateTopupSchema: FastifySchema = {
         },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: unauthorized,
   },
 };
@@ -195,7 +197,7 @@ export const verifyTopupSchema: FastifySchema = {
         data: { type: 'object', properties: { transaction: transactionObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: unauthorized,
     404: errorResponse,
   },
@@ -231,7 +233,7 @@ export const paySchema: FastifySchema = {
         data: { type: 'object', properties: { transaction: transactionObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: unauthorized,
     404: errorResponse,
   },
@@ -262,7 +264,7 @@ export const refundSchema: FastifySchema = {
         data: { type: 'object', properties: { transaction: transactionObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: unauthorized,
     403: errorResponse,
     404: errorResponse,

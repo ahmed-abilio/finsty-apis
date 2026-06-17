@@ -88,6 +88,9 @@ class Coupon extends Model<CouponAttributes, CouponCreationAttributes> implement
   declare readonly updatedAt: Date;
 
   toPublicJSON(): any {
+    const raw = ((this as unknown as { dataValues?: Record<string, unknown> }).dataValues ??
+      {}) as Record<string, unknown>;
+
     const safeNumber = (val: any) => {
       if (val === null || val === undefined) return null;
       const num = Number(val);
@@ -98,6 +101,11 @@ class Coupon extends Model<CouponAttributes, CouponCreationAttributes> implement
       if (!val) return null;
       const d = new Date(val);
       return isNaN(d.getTime()) ? null : d.toISOString();
+    };
+
+    const readBool = (camel: string, snake: string, fallback = false): boolean => {
+      const value = this.get(camel) ?? raw[camel] ?? raw[snake];
+      return value === undefined ? fallback : Boolean(value);
     };
 
     return {
@@ -111,13 +119,13 @@ class Coupon extends Model<CouponAttributes, CouponCreationAttributes> implement
       validTo: formatDate(this.get('validTo')),
       usageLimitTotal: safeNumber(this.get('usageLimitTotal')),
       usageLimitPerUser: safeNumber(this.get('usageLimitPerUser')),
-      isStackable: !!this.get('isStackable'),
-      isFirstOrderOnly: !!this.get('isFirstOrderOnly'),
-      storeId: this.get('storeId') ?? null,
-      categoryId: this.get('categoryId') ?? null,
-      isApproved: !!this.get('isApproved'),
-      isActive: !!this.get('isActive'),
-      readyToUse: !!this.get('readyToUse'),
+      isStackable: readBool('isStackable', 'is_stackable'),
+      isFirstOrderOnly: readBool('isFirstOrderOnly', 'is_first_order_only'),
+      storeId: this.get('storeId') ?? raw.storeId ?? raw.store_id ?? null,
+      categoryId: this.get('categoryId') ?? raw.categoryId ?? raw.category_id ?? null,
+      isApproved: readBool('isApproved', 'is_approved'),
+      isActive: readBool('isActive', 'is_active', true),
+      readyToUse: readBool('readyToUse', 'ready_to_use'),
       createdBy: this.get('createdBy'),
       appliesTo: this.get('appliesTo') ?? 'all_products',
       minimumRequirement: this.get('minimumRequirement') ?? 'none',

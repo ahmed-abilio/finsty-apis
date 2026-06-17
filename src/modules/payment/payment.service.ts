@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import { v4 as uuidv4 } from 'uuid';
+import type { Transaction } from 'sequelize';
 import sequelize from '@config/database';
 import { AppError } from '@utils/appError';
 import { paymentProvider } from '@utils/paymentProvider';
@@ -11,6 +12,16 @@ import Wallet from '@modules/wallet/wallet.model';
 import WalletTransaction from '@modules/wallet/wallet-transaction.model';
 import CartItem from '@modules/cart/cart-item.model';
 import emailQueue from '@queues/emailQueue';
+import { assertOrderDeliveryShadowfaxValidForPayment } from '@modules/order/orderDeliveryValidation';
+import { scheduleShadowfaxPlacementIfDelivery } from '@modules/shadowfax/shadowfaxPlacement.service';
+import { buildAmountMismatchContext } from '@utils/paymentAmountValidation';
+import { NotificationType } from '@modules/notification/notification.types';
+import { formatOrderNumber, notifyUser } from '@modules/notification/notification.service';
+import {
+  notifyBuyerOrderStatus,
+  notifyOrderPlacedAfterPayment,
+  notifyPaymentCancelled,
+} from '@modules/notification/notification.order';
 
 // ─── State machine: valid transitions ─────────────────────────────────────────
 
@@ -49,8 +60,24 @@ function verifyRazorpaySignature(
 
 export interface InitiatePaymentInput {
   orderId?: string;
-  amount: number;
+  amount?: number;
   currency?: string;
+  useWallet?: boolean;
+}
+
+export interface InitiatePaymentResult {
+  // Razorpay path
+  paymentId?: string;
+  checkoutUrl?: string;
+  providerOrderId?: string;
+  amount?: number;
+  currency?: string;
+  walletAmountToBeDeducted?: number;
+  // Full-wallet path
+  fullyPaidByWallet?: boolean;
+  walletBalance?: number;
+  walletAmountUsed?: number;
+  orderId?: string;
 }
 
 export interface CapturePaymentInput {
@@ -72,22 +99,11 @@ export interface ProcessRefundInput {
 class PaymentService {
   // ─── Initiate ──────────────────────────────────────────────────────────────
 
-  async initiatePayment(userId: string, input: InitiatePaymentInput) {
-    const { orderId, amount, currency = 'INR' } = input;
+  async initiatePayment(userId: string, input: InitiatePaymentInput): Promise<InitiatePaymentResult> {
+    const { orderId, currency = 'INR', useWallet } = input;
+    let { amount } = input;
 
-    // Validate order ownership and status
-    if (orderId) {
-      const order = await Order.findOne({ where: { id: orderId, userId } });
-      if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
-      if (order.status !== 'pending') {
-        throw AppError.badRequest(
-          'Only pending orders can be paid',
-          'ORDER_NOT_PAYABLE',
-        );
-      }
-    }
-
-    // Ensure wallet exists
+    // Ensure wallet exists (needed for all paths)
     const [wallet] = await Wallet.findOrCreate({
       where: { userId },
       defaults: { userId, balance: 0, currency, isActive: true },
@@ -95,16 +111,226 @@ class PaymentService {
 
     if (!wallet.isActive) throw AppError.badRequest('Wallet is inactive', 'WALLET_INACTIVE');
 
+    // ── useWallet path ──────────────────────────────────────────────────────
+    if (useWallet) {
+      if (!orderId) {
+        throw AppError.badRequest('orderId is required when useWallet is true', 'ORDER_REQUIRED');
+      }
+
+      const order = await Order.findOne({ where: { id: orderId, userId } });
+      if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+      if (order.status !== 'pending') {
+        throw AppError.badRequest('Only pending orders can be paid', 'ORDER_NOT_PAYABLE');
+      }
+
+      await assertOrderDeliveryShadowfaxValidForPayment(order, userId);
+
+      const totalAmount = parseFloat(Number(order.totalAmount).toFixed(2));
+      const walletBalance = parseFloat(Number(wallet.balance).toFixed(2));
+      const walletAmount = parseFloat(Math.min(walletBalance, totalAmount).toFixed(2));
+      const razorpayAmount = parseFloat((totalAmount - walletAmount).toFixed(2));
+
+      // SECURITY: in the wallet path, `amount` returned to the client is the
+      // Razorpay portion (order total minus wallet balance applied). If the
+      // client sends `amount`, it must match that server-computed value within
+      // 0.01 INR. Mismatched values (including a full-wallet request that
+      // still ships a non-zero amount) are rejected before Razorpay is hit.
+      if (amount !== undefined && Math.abs(Number(amount) - razorpayAmount) > 0.01) {
+        const mismatch = buildAmountMismatchContext({
+          order,
+          clientAmount: Number(amount),
+          suggestedAmount: razorpayAmount,
+          useWallet: true,
+          walletAmount,
+        });
+        logger.warn(
+          { userId, orderId, expectedRazorpayAmount: razorpayAmount, ...mismatch },
+          'Wallet payment amount mismatch — client value differs from server-computed Razorpay portion',
+        );
+        throw AppError.badRequest(
+          'Payment amount does not match expected charge (order total minus wallet balance)',
+          'AMOUNT_MISMATCH',
+          { ...mismatch },
+        );
+      }
+
+      // Case A — wallet covers everything
+      if (razorpayAmount === 0) {
+        let deliveryOrderIdForShadowfax: string | null = null;
+        const t = await sequelize.transaction();
+        try {
+          const lockedWallet = await Wallet.findOne({
+            where: { id: wallet.id },
+            lock: t.LOCK.UPDATE,
+            transaction: t,
+          });
+          if (!lockedWallet) throw AppError.notFound('Wallet not found', 'WALLET_NOT_FOUND');
+
+          const balanceBefore = parseFloat(Number(lockedWallet.balance).toFixed(2));
+          if (balanceBefore < totalAmount) {
+            throw AppError.badRequest('Insufficient wallet balance', 'INSUFFICIENT_FUNDS');
+          }
+          const balanceAfter = parseFloat((balanceBefore - totalAmount).toFixed(2));
+
+          await lockedWallet.update({ balance: balanceAfter }, { transaction: t });
+
+          await WalletTransaction.create(
+            {
+              walletId: lockedWallet.id,
+              reference: `wallet_pay_order_${orderId}`,
+              type: 'debit',
+              amount: totalAmount,
+              fee: 0,
+              balanceBefore,
+              balanceAfter,
+              status: 'successful',
+              source: 'order_payment',
+              provider: null,
+              providerReference: null,
+              metadata: { orderId, paymentMode: 'full_wallet' },
+            },
+            { transaction: t },
+          );
+
+          const lockedOrder = await Order.findOne({
+            where: { id: orderId },
+            lock: t.LOCK.UPDATE,
+            transaction: t,
+          });
+
+          if (lockedOrder) {
+            await lockedOrder.update({ status: 'confirmed' }, { transaction: t });
+
+            if (lockedOrder.deliveryType === 'delivery') {
+              deliveryOrderIdForShadowfax = lockedOrder.id;
+            }
+
+            const orderMeta = lockedOrder.metadata as { cartItemIds?: string[] } | null;
+            if (orderMeta?.cartItemIds && Array.isArray(orderMeta.cartItemIds)) {
+              await CartItem.destroy({
+                where: { id: orderMeta.cartItemIds },
+                transaction: t,
+              });
+            }
+          }
+
+          await t.commit();
+
+          if (deliveryOrderIdForShadowfax) {
+            scheduleShadowfaxPlacementIfDelivery({
+              id: deliveryOrderIdForShadowfax,
+              deliveryType: 'delivery',
+            });
+          }
+
+          void notifyOrderPlacedAfterPayment(userId, orderId);
+          notifyBuyerOrderStatus(userId, orderId, 'confirmed');
+
+          return {
+            fullyPaidByWallet: true,
+            walletBalance: balanceAfter,
+            walletAmountUsed: totalAmount,
+            orderId,
+          };
+        } catch (err) {
+          await t.rollback();
+          if (err instanceof AppError) throw err;
+          logger.error({ err, orderId, userId }, 'Full wallet payment failed');
+          throw AppError.internal('Full wallet payment failed', 'WALLET_PAYMENT_FAILED');
+        }
+      }
+
+      // Case B — partial: Razorpay covers razorpayAmount, wallet covers walletAmount on capture
+      const reference = uuidv4();
+      const result = await paymentProvider.initiate({
+        amount: razorpayAmount,
+        currency,
+        reference,
+        metadata: { userId, orderId },
+      });
+
+      try {
+        const payment = await Payment.create({
+          orderId,
+          walletId: wallet.id,
+          userId,
+          amount: razorpayAmount,
+          currency,
+          status: 'pending',
+          provider: process.env.PAYMENT_PROVIDER ?? 'manual',
+          providerOrderId: result.provider_reference,
+          metadata: { walletAmount, paymentMode: 'partial' },
+        });
+
+        return {
+          paymentId: payment.id,
+          checkoutUrl: result.checkout_url,
+          providerOrderId: result.provider_reference,
+          amount: razorpayAmount,
+          currency,
+          walletAmountToBeDeducted: walletAmount,
+        };
+      } catch (err) {
+        logger.error(
+          { err, providerOrderId: result.provider_reference, userId, amount: razorpayAmount },
+          'Payment DB insert failed after provider order creation — dangling provider order needs manual reconciliation',
+        );
+        throw AppError.internal('Failed to record payment', 'PAYMENT_RECORD_FAILED');
+      }
+    }
+
+    // ── Normal Razorpay path (no wallet) ────────────────────────────────────
+    // SECURITY: for order payments, the amount is ALWAYS computed server-side
+    // from `Order.totalAmount` (which already accounts for cart price, tax,
+    // delivery, coupon discount, etc.). The client-supplied `amount` is never
+    // trusted — at most we use it to detect a stale checkout screen and
+    // fail-fast with AMOUNT_MISMATCH. For wallet top-ups (no orderId) the
+    // client `amount` is required because there is no server-side reference.
+    if (orderId) {
+      const order = await Order.findOne({ where: { id: orderId, userId } });
+      if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+      if (order.status !== 'pending') {
+        throw AppError.badRequest('Only pending orders can be paid', 'ORDER_NOT_PAYABLE');
+      }
+
+      await assertOrderDeliveryShadowfaxValidForPayment(order, userId);
+
+      const expectedAmount = parseFloat(Number(order.totalAmount).toFixed(2));
+
+      if (amount !== undefined && Math.abs(Number(amount) - expectedAmount) > 0.01) {
+        const mismatch = buildAmountMismatchContext({
+          order,
+          clientAmount: Number(amount),
+          suggestedAmount: expectedAmount,
+          useWallet: false,
+        });
+        logger.warn(
+          { userId, orderId, expectedAmount, ...mismatch },
+          'Order payment amount mismatch — client value differs from server-calculated order total',
+        );
+        throw AppError.badRequest(
+          'Payment amount does not match order total',
+          'AMOUNT_MISMATCH',
+          { ...mismatch },
+        );
+      }
+
+      amount = expectedAmount;
+    } else {
+      if (!amount || amount <= 0) {
+        throw AppError.badRequest('amount is required', 'AMOUNT_REQUIRED');
+      }
+    }
+
     const reference = uuidv4();
 
-    // Call provider — this is external and cannot be rolled back if DB fails
     const result = await paymentProvider.initiate({
       amount,
       currency,
       reference,
       metadata: { userId, orderId: orderId ?? null },
     });
-    console.log(result);
+
     try {
       const payment = await Payment.create({
         orderId: orderId ?? null,
@@ -116,7 +342,7 @@ class PaymentService {
         provider: process.env.PAYMENT_PROVIDER ?? 'manual',
         providerOrderId: result.provider_reference,
       });
-console.log(result);
+
       return {
         paymentId: payment.id,
         checkoutUrl: result.checkout_url,
@@ -125,7 +351,6 @@ console.log(result);
         currency: payment.currency,
       };
     } catch (err) {
-      // DB insert failed after provider order was already created — log for ops reconciliation
       logger.error(
         { err, providerOrderId: result.provider_reference, userId, amount },
         'Payment DB insert failed after provider order creation — dangling provider order needs manual reconciliation',
@@ -165,6 +390,9 @@ console.log(result);
     const verified = await paymentProvider.verify(providerPaymentId);
     if (verified.status !== 'successful') {
       await payment.update({ status: 'failed' });
+      notifyUser(userId, NotificationType.PAYMENT_FAILED, {
+        orderId: payment.orderId ?? undefined,
+      });
       throw AppError.badRequest('Payment was not successful with provider', 'PAYMENT_FAILED');
     }
 
@@ -178,7 +406,44 @@ console.log(result);
       throw AppError.badRequest('Payment amount mismatch', 'AMOUNT_MISMATCH');
     }
 
+    // SECURITY: for order-linked payments, also confirm that the *total* paid
+    // (Razorpay portion + wallet portion held in metadata) matches the
+    // server-calculated order total. This catches any drift between initiate
+    // and capture (e.g. tampered metadata, mutated order, recalculated
+    // discount) before we mark the order as confirmed.
+    if (payment.orderId) {
+      const orderForValidation = await Order.findOne({ where: { id: payment.orderId } });
+      if (!orderForValidation) {
+        throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+      }
+
+      const paymentMeta = payment.metadata as { walletAmount?: number; paymentMode?: string } | null;
+      const walletPortion = parseFloat(Number(paymentMeta?.walletAmount ?? 0).toFixed(2));
+      const razorpayPortion = parseFloat(Number(payment.amount).toFixed(2));
+      const totalPaid = parseFloat((walletPortion + razorpayPortion).toFixed(2));
+      const expectedTotal = parseFloat(Number(orderForValidation.totalAmount).toFixed(2));
+
+      if (Math.abs(totalPaid - expectedTotal) > 0.01) {
+        logger.error(
+          {
+            paymentId,
+            orderId: payment.orderId,
+            expectedTotal,
+            totalPaid,
+            razorpayPortion,
+            walletPortion,
+          },
+          'Captured payment total does not match order total',
+        );
+        throw AppError.badRequest(
+          'Paid amount does not match order total',
+          'AMOUNT_MISMATCH',
+        );
+      }
+    }
+
     const t = await sequelize.transaction();
+    let confirmedDeliveryOrder: Order | null = null;
     try {
       // 1. Update payment
       await payment.update(
@@ -187,6 +452,7 @@ console.log(result);
       );
 
       let currentBalance = 0;
+      let walletAmountUsed = 0;
 
       const lockedWallet = await Wallet.findOne({
         where: { id: payment.walletId },
@@ -194,11 +460,55 @@ console.log(result);
         transaction: t,
       });
       if (!lockedWallet) throw AppError.notFound('Wallet not found', 'WALLET_NOT_FOUND');
-      
-      currentBalance = Number(lockedWallet.balance);
+
+      currentBalance = parseFloat(Number(lockedWallet.balance).toFixed(2));
 
       if (payment.orderId) {
-        // Direct Order Checkout Flow
+        // Check if this was a partial payment (wallet + Razorpay)
+        const paymentMeta = payment.metadata as { walletAmount?: number; paymentMode?: string } | null;
+        const walletAmount = parseFloat(Number(paymentMeta?.walletAmount ?? 0).toFixed(2));
+
+        if (walletAmount > 0) {
+          // Deduct the wallet portion atomically
+          if (currentBalance < walletAmount) {
+            throw AppError.badRequest(
+              'Insufficient wallet balance to complete partial payment',
+              'INSUFFICIENT_FUNDS',
+            );
+          }
+
+          const balanceBefore = currentBalance;
+          const balanceAfter = parseFloat((balanceBefore - walletAmount).toFixed(2));
+
+          await lockedWallet.update({ balance: balanceAfter }, { transaction: t });
+
+          await WalletTransaction.create(
+            {
+              walletId: lockedWallet.id,
+              reference: `wallet_pay_order_${payment.orderId}`,
+              type: 'debit',
+              amount: walletAmount,
+              fee: 0,
+              balanceBefore,
+              balanceAfter,
+              status: 'successful',
+              source: 'order_payment',
+              provider: null,
+              providerReference: null,
+              metadata: {
+                paymentId,
+                razorpayAmount: Number(payment.amount),
+                paymentMode: 'partial_wallet',
+              },
+            },
+            { transaction: t },
+          );
+
+          currentBalance = balanceAfter;
+          walletAmountUsed = walletAmount;
+        }
+
+        // Confirm order and clear cart
         const order = await Order.findOne({
           where: { id: payment.orderId },
           lock: t.LOCK.UPDATE,
@@ -208,11 +518,14 @@ console.log(result);
         if (order) {
           await order.update({ status: 'confirmed' }, { transaction: t });
 
-          // Clear the cart items that were locked into this order
-          const metadata = order.metadata as { cartItemIds?: string[] } | null;
-          if (metadata?.cartItemIds && Array.isArray(metadata.cartItemIds)) {
+          if (order.deliveryType === 'delivery') {
+            confirmedDeliveryOrder = order;
+          }
+
+          const orderMeta = order.metadata as { cartItemIds?: string[] } | null;
+          if (orderMeta?.cartItemIds && Array.isArray(orderMeta.cartItemIds)) {
             await CartItem.destroy({
-              where: { id: metadata.cartItemIds },
+              where: { id: orderMeta.cartItemIds },
               transaction: t,
             });
           }
@@ -245,9 +558,35 @@ console.log(result);
       }
 
       await t.commit();
-      return { success: true, walletBalance: currentBalance };
+
+      if (confirmedDeliveryOrder) {
+        scheduleShadowfaxPlacementIfDelivery(confirmedDeliveryOrder);
+      }
+
+      if (payment.orderId) {
+        const orderNumber = formatOrderNumber(payment.orderId);
+        notifyUser(userId, NotificationType.PAYMENT_SUCCESS, {
+          orderId: payment.orderId,
+          orderNumber,
+          amount: Number(payment.amount) + walletAmountUsed,
+        });
+        void notifyOrderPlacedAfterPayment(userId, payment.orderId);
+        notifyBuyerOrderStatus(userId, payment.orderId, 'confirmed');
+      } else {
+        notifyUser(userId, NotificationType.WALLET_CREDITED, {
+          amount: Number(payment.amount),
+        });
+      }
+
+      return {
+        success: true,
+        walletBalance: currentBalance,
+        walletAmountUsed,
+        razorpayAmountPaid: Number(payment.amount),
+      };
     } catch (err) {
       await t.rollback();
+      if (err instanceof AppError) throw err;
       throw AppError.internal('Payment capture failed', 'PAYMENT_CAPTURE_FAILED');
     }
   }
@@ -448,6 +787,28 @@ console.log(result);
     };
   }
 
+  // ─── Cancel incomplete (checkout dismissed) ────────────────────────────────
+
+  /**
+   * Marks pending Razorpay attempts as failed and notifies the buyer.
+   * Call when the user closes the payment UI without capturing.
+   */
+  async cancelIncompletePayment(userId: string, orderId: string): Promise<{ paymentsFailed: number }> {
+    const order = await Order.findOne({ where: { id: orderId, userId } });
+    if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+    if (order.status !== 'pending') {
+      throw AppError.badRequest(
+        'Only pending orders with incomplete payment can be cancelled',
+        'ORDER_NOT_PAYABLE',
+      );
+    }
+
+    const paymentsFailed = await failPendingPaymentsForOrder(orderId);
+    notifyPaymentCancelled(userId, orderId);
+
+    return { paymentsFailed };
+  }
+
   // ─── Get config ────────────────────────────────────────────────────────────
 
   async getPaymentConfig() {
@@ -455,6 +816,19 @@ console.log(result);
       razorpayKeyId: process.env.RAZORPAY_KEY_ID || '',
     };
   }
+}
+
+/** Mark open payment attempts as failed so the buyer can initiate again. */
+export async function failPendingPaymentsForOrder(
+  orderId: string,
+  transaction?: Transaction,
+): Promise<number> {
+  const pending = await Payment.findAll({ where: { orderId, status: 'pending' }, transaction });
+  for (const payment of pending) {
+    assertTransition(payment.status, 'failed');
+    await payment.update({ status: 'failed' }, { transaction });
+  }
+  return pending.length;
 }
 
 export default new PaymentService();

@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Shared object shape ───────────────────────────────────────────────────────
 
 const userObject = {
@@ -139,8 +141,9 @@ export const confirmAvatarSchema: FastifySchema = {
         },
       },
     },
-    400: {
-      description: 'Invalid image URL',
+    400: validationErrorResponse,
+    401: {
+      description: 'Unauthorized',
       type: 'object',
       properties: {
         success: { type: 'boolean' },
@@ -150,6 +153,40 @@ export const confirmAvatarSchema: FastifySchema = {
         },
       },
     },
+  },
+};
+
+// ─── PUT /users/me/device-token ───────────────────────────────────────────────
+
+export const registerDeviceTokenSchema: FastifySchema = {
+  tags: ['User'],
+  summary: 'Register FCM device token for push notifications',
+  description:
+    'Upserts the Firebase Cloud Messaging token for the authenticated user (role from JWT). ' +
+    'Call after login and whenever the FCM token refreshes. Requires the mobile app to request notification permission first.',
+  security: [{ BearerAuth: [] }],
+  body: {
+    type: 'object',
+    required: ['token', 'platform'],
+    properties: {
+      token: { type: 'string', minLength: 1, description: 'FCM registration token' },
+      platform: { type: 'string', enum: ['ios', 'android'] },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      description: 'Token registered',
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: { message: { type: 'string' } },
+        },
+      },
+    },
+    400: validationErrorResponse,
     401: {
       description: 'Unauthorized',
       type: 'object',

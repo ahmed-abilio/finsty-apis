@@ -1,5 +1,8 @@
 import { FastifySchema } from 'fastify';
 
+import { orderObject } from '@modules/order/order.schema';
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 const unauthorized = {
   type: 'object',
   properties: {
@@ -543,13 +546,7 @@ export const approveVendorSchema: FastifySchema = {
         data: { type: 'object', properties: { store: storeObjectAdmin } },
       },
     },
-    400: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } } },
-      },
-    },
+    400: validationErrorResponse,
     401: unauthorized,
     404: notFound,
     409: conflict,
@@ -855,6 +852,224 @@ export const getMyBrandsSchema: FastifySchema = {
       },
     },
     401: unauthorized,
+    404: notFound,
+  },
+};
+
+// ─── GET /stores/my/dashboard ────────────────────────────────────────────────
+
+const dashboardMetricWithChange = {
+  type: 'object',
+  properties: {
+    current: { type: 'number' },
+    previous: { type: 'number' },
+    changePercent: {
+      type: 'number',
+      description: 'Signed % vs previous period (positive = up, negative = down)',
+    },
+  },
+} as const;
+
+const dashboardStockTile = {
+  type: 'object',
+  properties: {
+    count: { type: 'number' },
+  },
+} as const;
+
+const dashboardSalesAnalyticsDay = {
+  type: 'object',
+  properties: {
+    date: { type: 'string', format: 'date', description: 'UTC calendar date YYYY-MM-DD' },
+    revenue: { type: 'number', description: 'Line-item revenue (INR) for this store on that day' },
+    orders: { type: 'number', description: 'Distinct paid orders containing this store’s items' },
+  },
+} as const;
+
+const topProductEntry = {
+  type: 'object',
+  properties: {
+    product: productObject,
+    unitsSold: { type: 'number' },
+    revenue: { type: 'number', description: 'All-time line-item revenue for this product' },
+  },
+} as const;
+
+export const getMyDashboardSchema: FastifySchema = {
+  tags: ['Vendor dashboard'],
+  summary: 'Vendor store dashboard',
+  description:
+    'KPI tiles, revenue summary, 7-day sales chart, top 5 products (full catalog shape), and 5 recent orders. ' +
+    'Revenue and order metrics use **vendor line items only** (`SUM order_items.total_price`), excluding `pending` and `cancelled` orders. ' +
+    'Month tiles compare **current UTC month (1st → now)** vs **previous full UTC month**. ' +
+    'Stock counts use summed variant stock: out of stock = total 0; low stock = total > 0 and ≤ `lowStockThreshold`; in stock = total above threshold.',
+  security: [{ BearerAuth: [] }],
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            tiles: {
+              type: 'object',
+              properties: {
+                products: {
+                  type: 'object',
+                  properties: {
+                    totalProducts: { type: 'number', description: 'All products in the store' },
+                    revenue: dashboardMetricWithChange,
+                  },
+                },
+                orders: {
+                  type: 'object',
+                  properties: {
+                    count: { type: 'number', description: 'Distinct orders this month (vendor items)' },
+                    changePercent: { type: 'number' },
+                  },
+                },
+                lowStockProducts: dashboardStockTile,
+                outOfStockProducts: dashboardStockTile,
+              },
+            },
+            revenue: {
+              type: 'object',
+              properties: {
+                lastMonth: { type: 'number', description: 'Previous full calendar month line-item revenue' },
+                changePercent: {
+                  type: 'number',
+                  description: 'Vs the month before last',
+                },
+              },
+            },
+            salesAnalytics: {
+              type: 'array',
+              items: dashboardSalesAnalyticsDay,
+              description: 'Last 7 UTC days including today',
+            },
+            topProducts: {
+              type: 'array',
+              items: topProductEntry,
+              description: 'Top 5 by units sold (all-time)',
+            },
+            recentOrders: {
+              type: 'array',
+              items: orderObject,
+              description: '5 most recent orders with vendor items',
+            },
+          },
+        },
+      },
+    },
+    401: unauthorized,
+    403: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+    404: notFound,
+  },
+};
+
+// ─── GET /stores/my/revenue ──────────────────────────────────────────────────
+
+export const getMyRevenueSchema: FastifySchema = {
+  tags: ['Vendor dashboard'],
+  summary: 'Vendor revenue report (vendor)',
+  description:
+    'Returns earnings tiles with period-over-period change percentages and paginated orders for the requested date range. ' +
+    '**totalEarnings** = `SUM(order_items.total_price)` for this store’s line items. ' +
+    '**commission** = `SUM(DISTINCT orders.platform_fee)` for qualifying orders containing this store’s products (fixed platform fee per order). ' +
+    '**actualPayment** = totalEarnings − commission. ' +
+    'Only orders with status `confirmed`, `processing`, `shipped`, or `delivered` are included. ' +
+    'Change percentages compare the requested `from`–`to` window against the immediately preceding period of equal duration.',
+  security: [{ BearerAuth: [] }],
+  querystring: {
+    type: 'object',
+    required: ['from', 'to'],
+    additionalProperties: false,
+    properties: {
+      from: {
+        type: 'string',
+        format: 'date-time',
+        description: 'Range start (ISO 8601 timestamp, inclusive)',
+      },
+      to: {
+        type: 'string',
+        format: 'date-time',
+        description: 'Range end (ISO 8601 timestamp, inclusive)',
+      },
+      page: { type: 'number', minimum: 1, default: 1, description: 'Orders page number' },
+      limit: {
+        type: 'number',
+        minimum: 1,
+        maximum: 100,
+        default: 20,
+        description: 'Orders per page (max 100)',
+      },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            period: {
+              type: 'object',
+              properties: {
+                from: { type: 'string', format: 'date-time', description: 'Requested range start (ISO 8601 UTC)' },
+                to: { type: 'string', format: 'date-time', description: 'Requested range end (ISO 8601 UTC)' },
+              },
+            },
+            tiles: {
+              type: 'object',
+              properties: {
+                totalEarnings: {
+                  ...dashboardMetricWithChange,
+                  description: 'Gross line-item revenue for this store',
+                },
+                commission: {
+                  ...dashboardMetricWithChange,
+                  description: 'Platform fee (commission) deducted from vendor orders',
+                },
+                actualPayment: {
+                  ...dashboardMetricWithChange,
+                  description: 'Net payout amount (totalEarnings − commission)',
+                },
+              },
+            },
+            orders: {
+              type: 'object',
+              properties: {
+                total: { type: 'number', description: 'Total qualifying orders in the requested period' },
+                page: { type: 'number' },
+                limit: { type: 'number' },
+                items: {
+                  type: 'array',
+                  items: orderObject,
+                  description: 'Paginated orders with full order details (same shape as GET /orders/vendor)',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    400: validationErrorResponse,
+    401: unauthorized,
+    403: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
     404: notFound,
   },
 };

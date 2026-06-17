@@ -20,18 +20,17 @@
     "noFallthroughCasesInSwitch": true,
     "strictNullChecks": true,
     "strictPropertyInitialization": true,
-    "ignoreDeprecations":"5.0",
-    "baseUrl": "./",
     "paths": {
-      "@config/*": ["src/config/*"],
-      "@modules/*": ["src/modules/*"],
-      "@utils/*": ["src/utils/*"],
-      "@middlewares/*": ["src/middlewares/*"],
-      "@queues/*": ["src/queues/*"],
-      "@plugins/*": ["src/plugins/*"],
-      "@types-app/*": ["src/types/*"]
+      "@config/*": ["./src/config/*"],
+      "@modules/*": ["./src/modules/*"],
+      "@utils/*": ["./src/utils/*"],
+      "@middlewares/*": ["./src/middlewares/*"],
+      "@queues/*": ["./src/queues/*"],
+      "@plugins/*": ["./src/plugins/*"],
+      "@observability/*": ["./src/observability/*"],
+      "@types-app/*": ["./src/types/*"]
     }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "migrations"]
+  "exclude": ["node_modules", "dist", "migrations", "src/**/*.test.ts"]
 }

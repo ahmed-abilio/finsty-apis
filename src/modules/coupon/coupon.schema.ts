@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Shared shapes ─────────────────────────────────────────────────────────────
 
 const errorResponse = {
@@ -44,7 +46,7 @@ const couponObject = {
 
 const createCouponBody = {
   type: 'object',
-  required: ['code', 'type', 'value', 'validFrom', 'validTo'],
+  required: ['code', 'type', 'validFrom', 'validTo'],
   properties: {
     code: {
       type: 'string',
@@ -59,8 +61,8 @@ const createCouponBody = {
     },
     value: {
       type: 'number',
-      exclusiveMinimum: 0,
-      description: 'Amount (FLAT) or percentage (PERCENTAGE). Ignored for FREE_DELIVERY.',
+      minimum: 0,
+      description: 'Amount (FLAT) or percentage (PERCENTAGE). Omit or send 0 for FREE_DELIVERY.',
     },
     minOrderValue: {
       type: 'number',
@@ -157,7 +159,7 @@ export const createCouponSchema: FastifySchema = {
         data: { type: 'object', properties: { coupon: couponObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     409: errorResponse,
@@ -184,7 +186,7 @@ export const approveCouponSchema: FastifySchema = {
         data: { type: 'object', properties: { coupon: couponObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -217,20 +219,40 @@ export const toggleCouponSchema: FastifySchema = {
   },
 };
 
+const appliedCouponLine = {
+  type: 'object',
+  properties: {
+    coupon: couponObject,
+    discountAmount: { type: 'number', description: 'Discount from this coupon on the running subtotal' },
+  },
+} as const;
+
 // ─── GET /coupons/validate ─────────────────────────────────────────────────────
 
 export const validateCouponSchema: FastifySchema = {
   tags: ['Coupons'],
-  summary: 'Validate a coupon for the current cart',
+  summary: 'Validate coupon(s) for the current cart',
   description:
-    'Returns the computed discount amount for a coupon code against the given cart context. ' +
-    'Does NOT redeem the coupon — redemption happens when the order is created.',
+    'Returns computed discount(s) for one or more coupon codes against the given cart context. ' +
+    'Send `couponCodes` (repeat query param) for stackable checkout preview; `code` remains supported for a single coupon. ' +
+    'When multiple codes are used, every coupon must have `isStackable: true`, at most one `FREE_DELIVERY` is allowed, and ' +
+    'FLAT/PERCENTAGE discounts apply sequentially on the remaining subtotal in request order. ' +
+    'Does NOT redeem coupons — redemption happens when the order is created.',
   security: [{ BearerAuth: [] }],
   querystring: {
     type: 'object',
-    required: ['code', 'subtotal'],
+    required: ['subtotal'],
     properties: {
-      code: { type: 'string', description: 'Coupon code to validate' },
+      code: {
+        type: 'string',
+        description: 'Single coupon code (legacy). Ignored when `couponCodes` is non-empty.',
+      },
+      couponCodes: {
+        type: 'array',
+        items: { type: 'string' },
+        description:
+          'Multiple coupon codes (same as checkout `couponCodes`). Repeat param, e.g. `?couponCodes=A&couponCodes=B`.',
+      },
       subtotal: { type: 'number', exclusiveMinimum: 0, description: 'Cart subtotal (before tax/delivery)' },
       storeId: { type: 'string', description: 'Store ID for store-scoped coupons' },
       categoryId: { type: 'string', description: 'Single category ID (legacy)' },
@@ -245,6 +267,7 @@ export const validateCouponSchema: FastifySchema = {
         description: 'Category IDs in the cart — required for specific_categories coupons',
       },
     },
+    anyOf: [{ required: ['code'] }, { required: ['couponCodes'] }],
     additionalProperties: false,
   },
   response: {
@@ -255,13 +278,29 @@ export const validateCouponSchema: FastifySchema = {
         data: {
           type: 'object',
           properties: {
+            applied: {
+              type: 'array',
+              items: appliedCouponLine,
+              description: 'Each coupon in request order with its line discount',
+            },
+            totalDiscount: {
+              type: 'number',
+              description: 'Sum of money-off discounts (capped at subtotal)',
+            },
+            deliveryWaived: {
+              type: 'boolean',
+              description: 'True when a FREE_DELIVERY coupon is in the stack',
+            },
             coupon: couponObject,
-            discountAmount: { type: 'number' },
+            discountAmount: {
+              type: 'number',
+              description: 'Same as the sole applied line when only one coupon (legacy clients)',
+            },
           },
         },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     404: errorResponse,
   },
@@ -272,11 +311,26 @@ export const validateCouponSchema: FastifySchema = {
 export const listCouponsSchema: FastifySchema = {
   tags: ['Coupons'],
   summary: 'List approved coupons',
+  description:
+    'Returns active, approved coupons for the authenticated user. ' +
+    'By default, `storeId` returns only that store’s coupons. ' +
+    'Set `includeGlobal=true` with `storeId` to also include platform-wide coupons (`storeId` null). ' +
+    'With `includeGlobal=true` and no `storeId`, only global coupons are returned.',
   security: [{ BearerAuth: [] }],
   querystring: {
     type: 'object',
     properties: {
-      storeId: { type: 'string' },
+      storeId: {
+        type: 'string',
+        description: 'Filter to a store’s coupons. Use with `includeGlobal` to add platform-wide coupons.',
+      },
+      includeGlobal: {
+        type: 'boolean',
+        default: false,
+        description:
+          'When `true` and `storeId` is set: return that store’s coupons plus global coupons. ' +
+          'When `true` without `storeId`: return only global coupons.',
+      },
       page: { type: 'number', minimum: 1, default: 1 },
       limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
     },
@@ -311,18 +365,33 @@ export const listCouponsSchema: FastifySchema = {
 
 export const vendorListCouponsSchema: FastifySchema = {
   tags: ['Coupons'],
-  summary: 'List all coupons for the authenticated vendor\'s store',
+  operationId: 'listVendorCoupons',
+  summary: 'GET /coupons/my-coupons — all store coupons (vendor)',
   description:
-    'Returns every coupon belonging to the vendor\'s store regardless of isActive or readyToUse status. ' +
-    'Restricted to Vendor role.',
+    '**Path:** `GET /api/v1/coupons/my-coupons` — vendor only.\n\n' +
+    'Returns every coupon for the vendor\'s store, including **inactive** (`isActive=false`), ' +
+    'unapproved, and not-ready coupons. Omit `isActive` to return all statuses.\n\n' +
+    'Optional `isActive=true` or `isActive=false` narrows the list. ' +
+    'Customer-facing `GET /coupons` only returns active approved coupons — use this endpoint for vendor management.',
   security: [{ BearerAuth: [] }],
   querystring: {
     type: 'object',
-    properties: {
-      page: { type: 'number', minimum: 1, default: 1 },
-      limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
-    },
     additionalProperties: false,
+    properties: {
+      page: { type: 'number', minimum: 1, default: 1, description: 'Page number (1-based)' },
+      limit: {
+        type: 'number',
+        minimum: 1,
+        maximum: 100,
+        default: 20,
+        description: 'Coupons per page (max 100)',
+      },
+      isActive: {
+        type: 'boolean',
+        description:
+          'Optional filter. Omit to include both active and inactive coupons. `false` returns only inactive.',
+      },
+    },
   },
   response: {
     200: {
@@ -346,6 +415,65 @@ export const vendorListCouponsSchema: FastifySchema = {
         },
       },
     },
+    401: errorResponse,
+    403: errorResponse,
+  },
+};
+
+// ─── GET /coupons/my-stats (vendor) ───────────────────────────────────────────
+
+const vendorCouponStatsData = {
+  type: 'object',
+  properties: {
+    totalCoupons: { type: 'number', description: 'Total coupons created for this store' },
+    activeCount: { type: 'number', description: 'Coupons with isActive=true' },
+    inactiveCount: { type: 'number', description: 'Coupons with isActive=false' },
+    usedCount: {
+      type: 'number',
+      description:
+        'Number of coupon redemptions on qualifying orders (confirmed, processing, shipped, delivered)',
+    },
+    totalDiscountAmount: {
+      type: 'number',
+      description:
+        'Sum of per-coupon discount amounts from order metadata.appliedCoupons on qualifying orders',
+    },
+  },
+} as const;
+
+export const vendorCouponStatsSchema: FastifySchema = {
+  tags: ['Coupons'],
+  summary: 'Vendor coupon statistics for own store',
+  description:
+    'Returns aggregate coupon metrics for the authenticated vendor\'s store: total coupons, active/inactive counts, ' +
+    'redemption count, and total discount given. Usage and discount totals only include orders with status ' +
+    '`confirmed`, `processing`, `shipped`, or `delivered`. Optional `from`/`to` filter usage metrics by order createdAt.',
+  security: [{ BearerAuth: [] }],
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      from: {
+        type: 'string',
+        format: 'date-time',
+        description: 'Filter usage/discount metrics from this timestamp (inclusive). Omit for all time.',
+      },
+      to: {
+        type: 'string',
+        format: 'date-time',
+        description: 'Filter usage/discount metrics until this timestamp (inclusive). Omit for all time.',
+      },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: vendorCouponStatsData,
+      },
+    },
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },

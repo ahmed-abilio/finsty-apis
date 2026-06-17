@@ -14,12 +14,22 @@ interface FirebaseError {
 interface AjvValidationIssue {
   message?: string;
   instancePath?: string;
-  params?: unknown;
+  schemaPath?: string;
+  keyword?: string;
+  params?: Record<string, unknown>;
 }
 
 interface FastifyValidationError {
   validation: AjvValidationIssue[];
+  validationContext?: string;
   statusCode?: number;
+}
+
+interface NormalizedValidationDetail {
+  field: string;
+  message: string;
+  keyword?: string;
+  params?: Record<string, unknown>;
 }
 
 interface HttpError {
@@ -52,6 +62,46 @@ interface ErrorResponseBody {
 
 const isValidationError = (err: unknown): err is FastifyValidationError =>
   typeof err === 'object' && err !== null && Array.isArray((err as FastifyValidationError).validation);
+
+// ─── Validation Helpers ───────────────────────────────────────────────────────
+
+/**
+ * Derive a friendly field path for a single AJV issue.
+ *
+ * - For `required` issues, AJV reports the parent object's path; the missing
+ *   property lives in `params.missingProperty`, so we append it.
+ * - For all other issues, `instancePath` already points at the offending field
+ *   (e.g. "/phone"), which we strip the leading slash from.
+ * - Falls back to the validation context ("body" / "querystring" / "params")
+ *   when AJV can't locate a specific field.
+ */
+const resolveFieldPath = (issue: AjvValidationIssue, context?: string): string => {
+  const missing = (issue.params as { missingProperty?: string } | undefined)?.missingProperty;
+  const instance = issue.instancePath?.replace(/^\//, '').replace(/\//g, '.') ?? '';
+
+  if (issue.keyword === 'required' && missing) {
+    return instance ? `${instance}.${missing}` : missing;
+  }
+
+  return instance || context || 'body';
+};
+
+const normalizeValidationIssues = (
+  issues: AjvValidationIssue[],
+  context?: string,
+): NormalizedValidationDetail[] =>
+  issues.map((issue) => ({
+    field: resolveFieldPath(issue, context),
+    message: issue.message ?? 'Invalid value',
+    ...(issue.keyword && { keyword: issue.keyword }),
+    ...(issue.params && Object.keys(issue.params).length > 0 && { params: issue.params }),
+  }));
+
+const buildValidationMessage = (details: NormalizedValidationDetail[]): string => {
+  if (details.length === 0) return 'Request validation failed';
+  const parts = details.map((d) => `${d.field} ${d.message}`);
+  return `Validation failed: ${parts.join('; ')}`;
+};
 
 const isFirebaseError = (err: unknown): err is FirebaseError =>
   typeof err === 'object' &&
@@ -98,8 +148,9 @@ export const formatError = (
   if (isValidationError(error)) {
     statusCode = 400;
     code = 'VALIDATION_ERROR';
-    message = 'Request validation failed';
-    details = error.validation;
+    const normalized = normalizeValidationIssues(error.validation, error.validationContext);
+    message = buildValidationMessage(normalized);
+    details = normalized;
   }
 
   // ── 2. Our own AppError (operational / expected errors) ───────────────────
@@ -108,6 +159,9 @@ export const formatError = (
     statusCode = appErr.statusCode ?? 400;
     code = appErr.code ?? code;
     message = appErr.message ?? message;
+    if (appErr.details !== undefined) {
+      details = appErr.details;
+    }
   }
 
   // ── 3. Firebase Admin SDK errors ──────────────────────────────────────────

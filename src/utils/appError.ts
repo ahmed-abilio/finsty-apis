@@ -2,21 +2,32 @@ export class AppError extends Error {
   public readonly statusCode: number;
   public readonly code: string;
   public readonly isOperational: boolean;
+  public readonly details?: Record<string, unknown>;
 
-  constructor(message: string, statusCode = 500, code = 'INTERNAL_ERROR') {
+  constructor(
+    message: string,
+    statusCode = 500,
+    code = 'INTERNAL_ERROR',
+    details?: Record<string, unknown>,
+  ) {
     super(message);
     this.name = 'AppError';
     this.statusCode = statusCode;
     this.code = code;
     this.isOperational = true;
+    this.details = details;
 
     // Maintain proper prototype chain in TypeScript
     Object.setPrototypeOf(this, AppError.prototype);
     Error.captureStackTrace(this, this.constructor);
   }
 
-  static badRequest(message: string, code = 'BAD_REQUEST'): AppError  {
-    return new AppError(message, 400, code);
+  static badRequest(
+    message: string,
+    code = 'BAD_REQUEST',
+    details?: Record<string, unknown>,
+  ): AppError {
+    return new AppError(message, 400, code, details);
   }
 
   static unauthorized(message = 'Unauthorized', code = 'UNAUTHORIZED'): AppError {

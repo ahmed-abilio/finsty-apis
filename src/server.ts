@@ -1,14 +1,18 @@
 import 'dotenv/config';
 import '@config/associations'; // register all model associations before any query runs
-import '@queues/orderWorker';
-import '@queues/orderExpiryWorker';
 
 import sequelize from '@config/database';
 import redis from '@config/redis';
 import { buildApp } from './app';
 import logger from '@utils/logger';
-import { fixMissingSlugs, fixBrandConstraints } from '@utils/maintenance';
+import {
+  fixMissingSlugs,
+  fixBrandConstraints,
+  ensureOrderIdColumn,
+  ensureVariantSizeChartColumn,
+} from '@utils/maintenance';
 import { scheduleOrderExpiryJob } from '@queues/orderExpiryQueue';
+import { scheduleShadowfaxReconciliationJob } from '@queues/shadowfaxReconciliationQueue';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -25,16 +29,30 @@ async function start() {
     ]);
 
     await fixMissingSlugs(sequelize);
+    await ensureOrderIdColumn(sequelize);
+    await ensureVariantSizeChartColumn(sequelize);
     await scheduleOrderExpiryJob();
+    await scheduleShadowfaxReconciliationJob();
 
-    // ── Sync models only in development ───────────────────────────────────────
-    if (process.env.NODE_ENV === 'development') {
+    // ── Optional dev sync (disabled by default) ───────────────────────────────
+    // For schema-breaking migrations, auto `alter` can fail before migrations run.
+    // Enable only when intentionally doing model-first development.
+    if (process.env.NODE_ENV === 'development' && process.env.ENABLE_DEV_SYNC === 'true') {
       await sequelize.sync({ alter: true });
       logger.info('Database models synchronized');
     }
 
     // Run after sync so dev alter does not leave global brand name uniqueness behind.
     await fixBrandConstraints(sequelize);
+
+    // Start queue workers after schema safety fixes are done.
+    await Promise.all([
+      import('@queues/orderWorker'),
+      import('@queues/orderExpiryWorker'),
+      import('@queues/shadowfaxWorker'),
+      import('@queues/shadowfaxReconciliationWorker'),
+      import('@queues/notificationWorker'),
+    ]);
 
     // ── Start Fastify ────────────────────────────────────────────────────────
     await app.listen({ port: PORT, host: HOST });

@@ -1,13 +1,16 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import couponService, { CreateCouponInput } from './coupon.service';
 import Store from '@modules/store/store.model';
+import { AppError } from '@utils/appError';
+import { parseRevenueDateRange } from '@modules/store/vendorDashboard.utils';
 
 interface CouponParams {
   couponId: string;
 }
 
 interface ValidateQuery {
-  code: string;
+  code?: string;
+  couponCodes?: string[];
   subtotal: number;
   storeId?: string;
   categoryId?: string;
@@ -17,6 +20,7 @@ interface ValidateQuery {
 
 interface ListQuery {
   storeId?: string;
+  includeGlobal?: boolean;
   isApproved?: boolean;
   isActive?: boolean;
   page?: number;
@@ -87,14 +91,20 @@ class CouponController {
     request: FastifyRequest<{ Querystring: ValidateQuery }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const { code, subtotal, storeId, categoryId, cartProductIds, cartCategoryIds } = request.query;
+    const { code, couponCodes, subtotal, storeId, categoryId, cartProductIds, cartCategoryIds } =
+      request.query;
 
-    // Check if this is the user's first order
+    const codes =
+      couponCodes && couponCodes.length > 0 ? couponCodes : code ? [code] : [];
+    if (codes.length === 0) {
+      throw AppError.badRequest('At least one coupon code is required', 'COUPON_CODE_REQUIRED');
+    }
+
     const completedOrderCount = await import('@modules/order/order.model').then(({ default: Order }) =>
       Order.count({ where: { userId: request.user.sub, status: 'delivered' } }),
     );
 
-    const result = await couponService.validate(code, {
+    const stack = await couponService.validateStack(codes, {
       userId: request.user.sub,
       subtotal,
       storeId: storeId ?? null,
@@ -104,13 +114,23 @@ class CouponController {
       cartCategoryIds: cartCategoryIds ?? [],
     });
 
-    void reply.status(200).send({
-      success: true,
-      data: {
-        coupon: result.coupon.toPublicJSON(),
-        discountAmount: result.discountAmount,
-      },
-    });
+    const applied = stack.applied.map((a) => ({
+      coupon: a.coupon.toPublicJSON(),
+      discountAmount: a.discountAmount,
+    }));
+
+    const data: Record<string, unknown> = {
+      applied,
+      totalDiscount: stack.totalDiscount,
+      deliveryWaived: stack.deliveryWaived,
+    };
+
+    if (applied.length === 1) {
+      data.coupon = applied[0]!.coupon;
+      data.discountAmount = applied[0]!.discountAmount;
+    }
+
+    void reply.status(200).send({ success: true, data });
   }
 
   async list(
@@ -119,6 +139,7 @@ class CouponController {
   ): Promise<void> {
     const result = await couponService.list({
       storeId: request.query.storeId,
+      includeGlobal: request.query.includeGlobal === true,
       isApproved: true,
       isActive: true,
       readyToUse: true,
@@ -140,8 +161,49 @@ class CouponController {
     });
   }
 
+  async getVendorCouponStats(
+    request: FastifyRequest<{ Querystring: { from?: string; to?: string } }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const store = await Store.findOne({ where: { ownerId: request.user.sub } });
+    if (!store) {
+      void reply.status(403).send({
+        success: false,
+        error: { code: 'NO_STORE', message: 'Vendor has no associated store' },
+      });
+      return;
+    }
+
+    const { from, to } = request.query;
+    let range: ReturnType<typeof parseRevenueDateRange> | undefined;
+
+    if (from !== undefined || to !== undefined) {
+      if (!from || !to) {
+        throw AppError.badRequest(
+          'Both from and to are required when filtering by date',
+          'INVALID_DATE_RANGE',
+        );
+      }
+      try {
+        range = parseRevenueDateRange(from, to);
+      } catch (err) {
+        const code = (err as Error).message === 'INVALID_RANGE' ? 'INVALID_DATE_RANGE' : 'INVALID_DATE';
+        const message =
+          (err as Error).message === 'INVALID_RANGE'
+            ? 'to must be greater than or equal to from'
+            : 'from and to must be valid ISO timestamps';
+        throw AppError.badRequest(message, code);
+      }
+    }
+
+    const stats = await couponService.getVendorCouponStats(store.id, range);
+    void reply.status(200).send({ success: true, data: stats });
+  }
+
   async getVendorCoupons(
-    request: FastifyRequest<{ Querystring: { page?: number; limit?: number } }>,
+    request: FastifyRequest<{
+      Querystring: { page?: number; limit?: number; isActive?: boolean };
+    }>,
     reply: FastifyReply,
   ): Promise<void> {
     const store = await Store.findOne({ where: { ownerId: request.user.sub } });
@@ -156,6 +218,7 @@ class CouponController {
     const result = await couponService.listVendorCoupons(store.id, {
       page: request.query.page,
       limit: request.query.limit,
+      ...(request.query.isActive !== undefined ? { isActive: request.query.isActive } : {}),
     });
     void reply.status(200).send({
       success: true,

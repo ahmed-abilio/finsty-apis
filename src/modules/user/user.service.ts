@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import User, { Roles, UserCreationAttributes } from './user.model';
+import { getRoleUserModel, RoleUserCreationAttributes } from './role-user.model';
 import { AppError } from '@utils/appError';
 import { AuthProvider } from '@types-app/index';
 
@@ -14,6 +15,10 @@ export interface UpsertUserInput {
   isActive?: boolean;
 }
 
+export interface AuthLookupOptions {
+  role?: Roles;
+}
+
 function generateReferralCode(): string {
   return crypto.randomBytes(5).toString('hex').toUpperCase(); // 10-char hex
 }
@@ -24,6 +29,10 @@ export interface UpdateUserInput {
 }
 
 class UserService {
+  private resolveRole(role?: Roles): Roles {
+    return role ?? Roles.USER;
+  }
+
   /**
    * Find an existing user or create a new one based on firebaseUid.
    * Returns [user, wasCreated].
@@ -88,10 +97,88 @@ class UserService {
     return [user, created];
   }
 
+  async upsertForRole(input: UpsertUserInput, options: AuthLookupOptions = {}): Promise<[User, boolean]> {
+    const role = this.resolveRole(options.role ?? input.role);
+    const RoleModel = getRoleUserModel(role);
+
+    let referredById: string | null = null;
+    if (input.referralCode) {
+      const referrer = await User.findOne({ where: { referralCode: input.referralCode } });
+      if (referrer) {
+        referredById = referrer.id;
+      }
+    }
+
+    const [roleUser, created] = await RoleModel.findOrCreate({
+      where: { firebaseUid: input.firebaseUid },
+      defaults: {
+        firebaseUid: input.firebaseUid,
+        phone: input.phone ?? null,
+        email: input.email ?? null,
+        provider: input.provider,
+        role,
+        isActive: input.isActive ?? true,
+        ipAddress: input.ipAddress ?? null,
+        referralCode: generateReferralCode(),
+        referredById,
+      } as RoleUserCreationAttributes,
+    });
+
+    if (!created) {
+      const updates: Partial<{ email: string; phone: string; ipAddress: string | null }> = {};
+      if (input.email && !roleUser.email) updates.email = input.email;
+      if (input.phone && !roleUser.phone) updates.phone = input.phone;
+      if (input.ipAddress !== undefined) updates.ipAddress = input.ipAddress ?? null;
+      if (Object.keys(updates).length > 0) {
+        await roleUser.update(updates);
+      }
+    }
+
+    await roleUser.reload();
+    return [roleUser as unknown as User, created];
+  }
+
+  async findByPhoneForRole(phone: string, options: AuthLookupOptions = {}): Promise<User | null> {
+    const role = this.resolveRole(options.role);
+    const RoleModel = getRoleUserModel(role);
+    const roleUser = await RoleModel.findOne({ where: { phone } });
+    if (roleUser) return roleUser as unknown as User;
+
+    return null;
+  }
+
+  async findByFirebaseUidForRole(firebaseUid: string, options: AuthLookupOptions = {}): Promise<User | null> {
+    const role = this.resolveRole(options.role);
+    const RoleModel = getRoleUserModel(role);
+    const roleUser = await RoleModel.findOne({ where: { firebaseUid } });
+    if (roleUser) return roleUser as unknown as User;
+
+    return null;
+  }
+
+  async findByIdForRole(id: string, options: AuthLookupOptions = {}): Promise<User> {
+    const role = this.resolveRole(options.role);
+    const RoleModel = getRoleUserModel(role);
+    const roleUser = await RoleModel.findByPk(id);
+    if (roleUser) return roleUser as unknown as User;
+
+    throw AppError.notFound('User not found');
+  }
+
   async findById(id: string): Promise<User> {
     const user = await User.findByPk(id);
     if (!user) throw AppError.notFound('User not found');
     return user;
+  }
+
+  /** Store owners may live in vendor_users, users, or admin_users after the role split. */
+  async findStoreOwnerById(id: string): Promise<User | null> {
+    for (const role of [Roles.VENDOR, Roles.USER, Roles.ADMIN]) {
+      const RoleModel = getRoleUserModel(role);
+      const row = await RoleModel.findByPk(id);
+      if (row) return row as unknown as User;
+    }
+    return null;
   }
 
   async findByFirebaseUid(firebaseUid: string): Promise<User | null> {
@@ -102,8 +189,8 @@ class UserService {
     return User.findOne({ where: { phone } });
   }
 
-  async update(id: string, input: UpdateUserInput): Promise<User> {
-    const user = await this.findById(id);
+  async update(id: string, input: UpdateUserInput, role: Roles = Roles.USER): Promise<User> {
+    const user = await this.findByIdForRole(id, { role });
 
     const updates: Partial<{ name: string | null; profileImage: string | null }> = {};
     if (input.name !== undefined) updates.name = input.name;
@@ -116,8 +203,8 @@ class UserService {
     return user;
   }
 
-  async updateAvatar(id: string, profileImageUrl: string): Promise<User> {
-    const user = await this.findById(id);
+  async updateAvatar(id: string, profileImageUrl: string, role: Roles = Roles.USER): Promise<User> {
+    const user = await this.findByIdForRole(id, { role });
     await user.update({ profileImage: profileImageUrl });
     return user;
   }
@@ -125,8 +212,8 @@ class UserService {
   /**
    * Soft-delete: mark isActive = false instead of destroying the row.
    */
-  async deactivate(id: string): Promise<void> {
-    const user = await this.findById(id);
+  async deactivate(id: string, role: Roles = Roles.USER): Promise<void> {
+    const user = await this.findByIdForRole(id, { role });
     await user.update({ isActive: false });
   }
 

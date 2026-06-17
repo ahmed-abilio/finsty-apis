@@ -3,7 +3,9 @@ dist/
 .env
 *.env.local
 firebase-service-account.json
+firebase.json
 *.log
 coverage/
 .DS_Store
 Thumbs.db
+aws-env.json

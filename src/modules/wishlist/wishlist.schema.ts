@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 const unauthorized = {
   type: 'object',
   properties: {
@@ -96,7 +98,7 @@ export const addToWishlistSchema: FastifySchema = {
   },
   response: {
     201: wishlistResponse,
-    400: unauthorized,
+    400: validationErrorResponse,
     401: unauthorized,
     404: unauthorized,
   },

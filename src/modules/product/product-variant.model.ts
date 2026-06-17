@@ -7,6 +7,7 @@ export interface ProductVariantAttributes {
   productId: string;
   colorId: string;
   size: string | null;
+  sizeChart: string | null;
   sku: string | null;
   stock: number;
   additionalPrice: number;
@@ -17,7 +18,7 @@ export interface ProductVariantAttributes {
 export interface ProductVariantCreationAttributes
   extends Optional<
     ProductVariantAttributes,
-    'id' | 'size' | 'sku' | 'stock' | 'additionalPrice'
+    'id' | 'size' | 'sizeChart' | 'sku' | 'stock' | 'additionalPrice'
   > {}
 
 class ProductVariant extends Model<ProductVariantAttributes, ProductVariantCreationAttributes>
@@ -26,6 +27,7 @@ class ProductVariant extends Model<ProductVariantAttributes, ProductVariantCreat
   declare productId: string;
   declare colorId: string;
   declare size: string | null;
+  declare sizeChart: string | null;
   declare sku: string | null;
   declare stock: number;
   declare additionalPrice: number;
@@ -43,6 +45,7 @@ class ProductVariant extends Model<ProductVariantAttributes, ProductVariantCreat
       productId: this.productId || raw.productId || raw.product_id || '',
       colorId: this.colorId || raw.colorId || raw.color_id || '',
       size: this.size || raw.size || null,
+      sizeChart: this.sizeChart || raw.sizeChart || raw.size_chart || null,
       sku: this.sku || raw.sku || null,
       stock: Number(this.stock ?? raw.stock ?? 0),
       additionalPrice: Number(this.additionalPrice ?? raw.additionalPrice ?? raw.additional_price ?? 0),
@@ -74,6 +77,11 @@ ProductVariant.init(
     size: {
       type: DataTypes.STRING(20),
       allowNull: true,
+    },
+    sizeChart: {
+      type: DataTypes.STRING(2048),
+      allowNull: true,
+      field: 'size_chart',
     },
     sku: {
       type: DataTypes.STRING(100),

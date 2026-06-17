@@ -32,10 +32,20 @@ import otpRoutes from '@modules/otp/otp.routes';
 import { couponRoutes, adminCouponRoutes } from '@modules/coupon/coupon.routes';
 import { adminBannerRoutes, publicBannerRoutes } from '@modules/banner/banner.routes';
 import brandRoutes from '@modules/brand/brand.routes';
+import shadowfaxRoutes from '@modules/shadowfax/shadowfax.routes';
+import shadowfaxWebhookRoutes from '@modules/shadowfax/tracking/shadowfax-webhook.routes';
+import platformSettingsAdminRoutes from '@modules/platform-settings/platform-settings.admin.routes';
+import configRoutes from '@modules/config/config.routes';
+import notificationInboxRoutes from '@modules/notification/notification.inbox.routes';
+import { cmsRoutes, adminCmsRoutes } from '@modules/cms/cms.routes';
 
 import emailQueue from '@queues/emailQueue';
 import orderQueue from '@queues/orderQueue';
 import orderExpiryQueue from '@queues/orderExpiryQueue';
+import shadowfaxQueue from '@queues/shadowfaxQueue';
+import shadowfaxReconciliationQueue from '@queues/shadowfaxReconciliationQueue';
+import notificationQueue from '@queues/notificationQueue';
+import { getShadowfaxMetrics } from '@observability/shadowfax.metrics';
 import { formatError } from './utils/errorFormatter';
 
 const API_PREFIX = process.env.API_PREFIX ?? '/api/v1';
@@ -59,7 +69,7 @@ export async function buildApp(): Promise<FastifyInstance> {
       customOptions: {
         removeAdditional: 'all',
         coerceTypes: 'array',
-        allErrors: false,
+        allErrors: true,
       },
     },
   });
@@ -105,6 +115,27 @@ export async function buildApp(): Promise<FastifyInstance> {
     },
   );
 
+  fastify.get(
+    '/health/shadowfax',
+    {
+      schema: {
+        tags: ['Health'],
+        summary: 'Shadowfax webhook and reconciliation metrics',
+        response: {
+          200: {
+            type: 'object',
+            properties: {
+              metrics: { type: 'object', additionalProperties: { type: 'number' } },
+            },
+          },
+        },
+      },
+    },
+    async (_request, reply) => {
+      void reply.send({ metrics: getShadowfaxMetrics() });
+    },
+  );
+
   // ── Global error handler ──────────────────────────────────────────────────
   fastify.setErrorHandler(formatError);
 
@@ -135,6 +166,15 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(adminBannerRoutes, { prefix: `${API_PREFIX}/admin/banners` });
   await fastify.register(publicBannerRoutes, { prefix: `${API_PREFIX}/banners` });
   await fastify.register(brandRoutes, { prefix: `${API_PREFIX}/stores` });
+  await fastify.register(shadowfaxRoutes, { prefix: `${API_PREFIX}/shadowfax` });
+  await fastify.register(shadowfaxWebhookRoutes, { prefix: '/api/webhooks' });
+  await fastify.register(platformSettingsAdminRoutes, {
+    prefix: `${API_PREFIX}/admin/platform-settings`,
+  });
+  await fastify.register(configRoutes, { prefix: `${API_PREFIX}/config` });
+  await fastify.register(cmsRoutes, { prefix: `${API_PREFIX}/cms` });
+  await fastify.register(adminCmsRoutes, { prefix: `${API_PREFIX}/admin/cms` });
+  await fastify.register(notificationInboxRoutes, { prefix: `${API_PREFIX}/notifications` });
 
   // ── Bull Board admin UI ───────────────────────────────────────────────────
   const serverAdapter = new BullBoardFastifyAdapter();
@@ -144,6 +184,9 @@ export async function buildApp(): Promise<FastifyInstance> {
       new BullMQAdapter(emailQueue) as unknown as BaseAdapter,
       new BullMQAdapter(orderQueue) as unknown as BaseAdapter,
       new BullMQAdapter(orderExpiryQueue) as unknown as BaseAdapter,
+      new BullMQAdapter(shadowfaxQueue) as unknown as BaseAdapter,
+      new BullMQAdapter(shadowfaxReconciliationQueue) as unknown as BaseAdapter,
+      new BullMQAdapter(notificationQueue) as unknown as BaseAdapter,
     ],
     serverAdapter,
   });

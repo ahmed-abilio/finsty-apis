@@ -16,11 +16,17 @@ import ProductColor from '@modules/product/product-color.model';
 import ProductColorImage from '@modules/product/product-color-image.model';
 import ProductVariant from '@modules/product/product-variant.model';
 import User, { Roles } from '@modules/user/user.model';
+import userService from '@modules/user/user.service';
 import { AppError } from '@utils/appError';
 import brandService from '@modules/brand/brand.service';
 import sequelize from '@config/database';
 import logger from '@utils/logger';
 import otpService from '@modules/otp/otp.service';
+import vendorDashboardService from './vendorDashboard.service';
+import vendorRevenueService from './vendorRevenue.service';
+import { stockStatusWhere } from '@modules/product/productStock.util';
+import type { DateRange } from './vendorDashboard.utils';
+import { formatVendorProduct, type ProductWithVendorAssocs } from './vendorProductFormat';
 
 // IFSC: 4 uppercase letters + '0' + 6 alphanumeric chars (RBI standard)
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -100,9 +106,9 @@ class StoreService {
       this.validateBankDetails(bankDetails);
     }
 
-    // 5. Owner check (only if provided)
+    // 5. Owner check (only if provided) — role-split tables, not legacy users-only lookup
     if (ownerId) {
-      const owner = await User.findByPk(ownerId);
+      const owner = await userService.findStoreOwnerById(ownerId);
       if (!owner) throw AppError.notFound('Owner user not found', 'OWNER_NOT_FOUND');
 
       // Prevent duplicate applications for the same owner
@@ -295,6 +301,9 @@ class StoreService {
   async update(storeId: string, data: Partial<StoreAttributes>): Promise<Store> {
     const store = await Store.findByPk(storeId);
     if (!store) throw AppError.notFound('Store not found', 'STORE_NOT_FOUND');
+    if (data.storeCategories !== undefined) {
+      await this.validateStoreCategories(data.storeCategories);
+    }
     return store.update(data);
   }
 
@@ -588,35 +597,17 @@ class StoreService {
     } = query;
 
     const offset = (page - 1) * limit;
-    const where: WhereOptions = { storeId: store.id };
+    const filters: WhereOptions[] = [{ storeId: store.id }];
 
-    if (isActive !== undefined) {
-      (where as Record<string, unknown>)['isActive'] = isActive;
-    }
-
-    if (stockStatus === 'out_of_stock') {
-      (where as Record<string, unknown>)['inStock'] = false;
-    } else if (stockStatus === 'in_stock') {
-      (where as Record<string, unknown>)['inStock'] = true;
-      (where as Record<string, unknown>)['lowStockAlert'] = false;
-    } else if (stockStatus === 'low_stock') {
-      (where as Record<string, unknown>)['inStock'] = true;
-      (where as Record<string, unknown>)['lowStockAlert'] = true;
-    }
-
-    if (categoryId) (where as Record<string, unknown>)['categoryId'] = categoryId;
-    if (subCategoryId) (where as Record<string, unknown>)['subCategoryId'] = subCategoryId;
-
+    if (isActive !== undefined) filters.push({ isActive });
+    if (stockStatus) filters.push(stockStatusWhere(stockStatus));
+    if (categoryId) filters.push({ categoryId });
+    if (subCategoryId) filters.push({ subCategoryId });
     if (search) {
-      (where as Record<string, unknown>)[Op.or as unknown as string] = [
-        { name: { [Op.iLike]: `%${search}%` } },
-      ];
+      filters.push({ [Op.or]: [{ name: { [Op.iLike]: `%${search}%` } }] });
     }
 
-    type ColorWithAssocs = ProductColor & {
-      images: ProductColorImage[];
-      variants: ProductVariant[];
-    };
+    const where: WhereOptions = filters.length === 1 ? filters[0]! : { [Op.and]: filters };
 
     const { count, rows } = await Product.findAndCountAll({
       where,
@@ -642,25 +633,28 @@ class StoreService {
     });
 
     return {
-      products: rows.map((p) => {
-        const { categoryId, subCategoryId, brand: _b, ...rest } = p.toPublicJSON();
-        return {
-          ...rest,
-          category: (p as any).category ? (p as any).category.toPublicJSON() : null,
-          subCategory: (p as any).subCategory ? (p as any).subCategory.toPublicJSON() : null,
-          brand: (p as any).brandDetail ? (p as any).brandDetail.toPublicJSON() : null,
-          images: ((p as any).images as ProductImage[] ?? []).map((i) => i.toPublicJSON()),
-          colors: ((p as any).colors as ColorWithAssocs[] ?? []).map((c) => ({
-            ...c.toPublicJSON(),
-            images: (c.images ?? []).map((img) => img.toPublicJSON()),
-            variants: (c.variants ?? []).map((v) => v.toPublicJSON()),
-          })),
-        };
-      }),
+      products: rows.map((p) => formatVendorProduct(p as ProductWithVendorAssocs)),
       total: count,
       page,
       limit,
     };
+  }
+
+  async getVendorDashboard(ownerId: string) {
+    const store = await this.findByOwner(ownerId);
+    return vendorDashboardService.getDashboard(store.id, ownerId);
+  }
+
+  async getVendorRevenue(
+    ownerId: string,
+    range: DateRange,
+    page = 1,
+    limit = 20,
+  ) {
+    const store = await this.findByOwner(ownerId);
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    return vendorRevenueService.getRevenue(store.id, ownerId, range, safePage, safeLimit);
   }
 
   async getCategoryExplorer(query: CategoryExplorerQuery) {

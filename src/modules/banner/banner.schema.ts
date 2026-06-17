@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Shared shapes ─────────────────────────────────────────────────────────────
 
 const errorResponse = {
@@ -72,7 +74,7 @@ export const createPriceBannerSchema: FastifySchema = {
         data: { type: 'object', properties: { banner: priceBannerObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },
@@ -105,7 +107,7 @@ export const updatePriceBannerSchema: FastifySchema = {
         data: { type: 'object', properties: { banner: priceBannerObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -193,7 +195,7 @@ export const createStoreDiscountBannerSchema: FastifySchema = {
         data: { type: 'object', properties: { banner: storeDiscountBannerObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -227,7 +229,7 @@ export const updateStoreDiscountBannerSchema: FastifySchema = {
         data: { type: 'object', properties: { banner: storeDiscountBannerObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -252,7 +254,7 @@ export const approveStoreDiscountBannerSchema: FastifySchema = {
         data: { type: 'object', properties: { banner: storeDiscountBannerObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -345,7 +347,7 @@ export const vendorCreateStoreDiscountBannerSchema: FastifySchema = {
         data: { type: 'object', properties: { banner: storeDiscountBannerObject } },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
   },

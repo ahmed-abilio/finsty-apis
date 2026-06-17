@@ -1,13 +1,16 @@
 import { FastifyInstance } from 'fastify';
-import orderController, { ListOrdersQuery } from './order.controller';
+import orderController, { VendorListOrdersQuery } from './order.controller';
 import {
   createOrderSchema,
   getJobStatusSchema,
   listOrdersSchema,
+  listVendorOrdersSchema,
   getOrderSchema,
+  getOrderDeliveryStatusSchema,
   cancelOrderSchema,
   payWithWalletSchema,
   adminUpdateStatusSchema,
+  vendorGetOrderSchema,
   vendorUpdateStatusSchema,
 } from './order.schema';
 import { Roles } from '@modules/user/user.model';
@@ -27,20 +30,23 @@ export default async function orderRoutes(fastify: FastifyInstance): Promise<voi
 
   fastify.get('/', { schema: listOrdersSchema }, orderController.list.bind(orderController));
 
-  fastify.get('/:orderId', { schema: getOrderSchema }, orderController.getOne.bind(orderController));
-
-  fastify.patch('/:orderId/cancel', { schema: cancelOrderSchema }, orderController.cancel.bind(orderController));
-
-  fastify.post('/:orderId/pay-wallet', { schema: payWithWalletSchema }, orderController.payWithWallet.bind(orderController));
-
-  // Vendor routes
-  fastify.get<{ Querystring: ListOrdersQuery }>(
+  // Vendor routes (register before /:orderId so /vendor is not captured as orderId)
+  fastify.get<{ Querystring: VendorListOrdersQuery }>(
     '/vendor',
     {
       preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
-      schema: listOrdersSchema,
+      schema: listVendorOrdersSchema,
     },
     orderController.vendorList.bind(orderController),
+  );
+
+  fastify.get<{ Params: { orderId: string } }>(
+    '/vendor/:orderId',
+    {
+      preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
+      schema: vendorGetOrderSchema,
+    },
+    orderController.vendorGetOne.bind(orderController),
   );
 
   fastify.patch<{ Params: { orderId: string }; Body: { status: string } }>(
@@ -51,6 +57,18 @@ export default async function orderRoutes(fastify: FastifyInstance): Promise<voi
     },
     orderController.vendorUpdateStatus.bind(orderController),
   );
+
+  fastify.get(
+    '/:orderId/delivery-status',
+    { schema: getOrderDeliveryStatusSchema },
+    orderController.getDeliveryStatus.bind(orderController),
+  );
+
+  fastify.get('/:orderId', { schema: getOrderSchema }, orderController.getOne.bind(orderController));
+
+  fastify.patch('/:orderId/cancel', { schema: cancelOrderSchema }, orderController.cancel.bind(orderController));
+
+  fastify.post('/:orderId/pay-wallet', { schema: payWithWalletSchema }, orderController.payWithWallet.bind(orderController));
 }
 
 export async function adminOrderRoutes(fastify: FastifyInstance): Promise<void> {

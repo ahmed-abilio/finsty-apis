@@ -1,5 +1,7 @@
 import { FastifySchema } from 'fastify';
 
+import { validationErrorResponse } from '@utils/sharedSchemas';
+
 // ─── Shared shapes ────────────────────────────────────────────────────────────
 
 const errorResponse = {
@@ -46,18 +48,92 @@ const paymentObject = {
 
 export const initiatePaymentSchema: FastifySchema = {
   tags: ['Payments'],
-  summary: 'Initiate a Razorpay payment',
+  summary: 'Initiate a payment (Razorpay, wallet, or partial)',
   description:
-    'Creates a Razorpay order and returns the checkout URL. ' +
-    'After the user completes payment, call `/payments/capture` with the Razorpay callback data.',
+    'Creates a payment. When `useWallet: true` the wallet balance is applied first. ' +
+    'If the wallet covers the full order, it is confirmed immediately (no Razorpay). ' +
+    'If partial, Razorpay covers only the remainder. ' +
+    'After the user completes Razorpay, call `/payments/capture`. ' +
+    '**Security:** for order payments (`orderId` provided), the chargeable amount is ' +
+    'always derived from the server-stored `Order.totalAmount`. The `amount` field in ' +
+    'the request body is ignored except as a sanity check — if it differs from the ' +
+    'server-calculated total by more than 0.01 INR the request is rejected with ' +
+    '`AMOUNT_MISMATCH`. `amount` is only required for wallet top-ups (no `orderId`). ' +
+    'For **delivery** orders, the server re-validates the saved address and replays Shadowfax before creating a Razorpay order (`DELIVERY_NOT_SERVICEABLE`, `DELIVERY_CHARGE_MISMATCH`, `ADDRESS_COORDINATES_REQUIRED`). ' +
+    'Clients should use `GET /cart/delivery-quote` or `order.totalAmount` so checkout matches payment. ' +
+    'On `AMOUNT_MISMATCH`, inspect `error.details` for `suggestedAmount`, `deliveryWaivedReason`, and `hint`.',
   security: [{ BearerAuth: [] }],
   body: {
     type: 'object',
-    required: ['amount'],
     properties: {
-      orderId: { type: 'string', format: 'uuid', description: 'Optional — link payment to an order' },
-      amount: { type: 'number', minimum: 1, description: 'Amount in INR (rupees, not paise)' },
+      orderId: {
+        type: 'string',
+        format: 'uuid',
+        description:
+          'When provided, the chargeable amount is taken from the order total — the `amount` field is ignored (except for an optional mismatch sanity check).',
+      },
+      amount: {
+        type: 'number',
+        minimum: 0,
+        description:
+          'Amount in INR. **Required only for wallet top-ups** (no `orderId`). ' +
+          'For order payments this value is never trusted — the server always uses `Order.totalAmount`. ' +
+          'If supplied, it is compared to the server-computed expected charge and a mismatch returns `AMOUNT_MISMATCH`: ' +
+          'when `useWallet` is absent or false the expected value is `Order.totalAmount`; ' +
+          'when `useWallet: true` the expected value is `Order.totalAmount - min(walletBalance, Order.totalAmount)` ' +
+          '(i.e. the Razorpay portion after the wallet is applied — `0` when the wallet fully covers the order).',
+      },
       currency: { type: 'string', default: 'INR', maxLength: 10 },
+      useWallet: { type: 'boolean', description: 'Apply wallet balance first; Razorpay covers the remainder' },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          additionalProperties: true,
+          properties: {
+            // Razorpay path
+            paymentId: { type: 'string' },
+            checkoutUrl: { type: 'string' },
+            providerOrderId: { type: 'string', description: 'Razorpay order ID' },
+            amount: { type: 'number' },
+            currency: { type: 'string' },
+            walletAmountToBeDeducted: { type: 'number', description: 'Wallet portion held for capture (Case B)' },
+            // Full-wallet path
+            fullyPaidByWallet: { type: 'boolean', description: 'True when wallet covered the entire order (Case A)' },
+            walletBalance: { type: 'number' },
+            walletAmountUsed: { type: 'number' },
+            orderId: { type: 'string' },
+          },
+        },
+      },
+    },
+    400: validationErrorResponse,
+    401: errorResponse,
+    404: errorResponse,
+  },
+};
+
+// ─── POST /payments/cancel-incomplete ─────────────────────────────────────────
+
+export const cancelIncompletePaymentSchema: FastifySchema = {
+  tags: ['Payments'],
+  summary: 'Cancel an incomplete checkout',
+  description:
+    'Call when the user closes the Razorpay (or payment) UI without completing capture. ' +
+    'Marks pending payment rows as `failed`, keeps the order `pending` so checkout can be retried, ' +
+    'and sends a `PAYMENT_CANCELLED` push notification.',
+  security: [{ BearerAuth: [] }],
+  body: {
+    type: 'object',
+    required: ['orderId'],
+    properties: {
+      orderId: { type: 'string', format: 'uuid' },
     },
     additionalProperties: false,
   },
@@ -69,16 +145,12 @@ export const initiatePaymentSchema: FastifySchema = {
         data: {
           type: 'object',
           properties: {
-            paymentId: { type: 'string' },
-            checkoutUrl: { type: 'string' },
-            providerOrderId: { type: 'string', description: 'The order ID from the payment provider (e.g., Razorpay Order ID)' },
-            amount: { type: 'number' },
-            currency: { type: 'string' },
+            paymentsFailed: { type: 'number' },
           },
         },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     404: errorResponse,
   },
@@ -110,13 +182,17 @@ export const capturePaymentSchema: FastifySchema = {
         success: { type: 'boolean' },
         data: {
           type: 'object',
+          additionalProperties: true,
           properties: {
-            walletBalance: { type: 'number' },
+            success: { type: 'boolean' },
+            walletBalance: { type: 'number', description: 'Wallet balance after capture' },
+            walletAmountUsed: { type: 'number', description: 'Wallet portion deducted (0 if no wallet used)' },
+            razorpayAmountPaid: { type: 'number', description: 'Amount paid via Razorpay' },
           },
         },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -155,7 +231,7 @@ export const requestRefundSchema: FastifySchema = {
         },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
@@ -220,7 +296,7 @@ export const processRefundSchema: FastifySchema = {
         },
       },
     },
-    400: errorResponse,
+    400: validationErrorResponse,
     401: errorResponse,
     403: errorResponse,
     404: errorResponse,
