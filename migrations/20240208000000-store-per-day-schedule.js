@@ -3,6 +3,14 @@
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
+    const tables = await queryInterface.showAllTables();
+    const tableNames = new Set(
+      tables.map((entry) => (typeof entry === 'string' ? entry : entry.tableName || entry.table_name)),
+    );
+    if (!tableNames.has('stores')) {
+      return;
+    }
+
     const columns = await queryInterface.describeTable('stores');
 
     if (columns['opening_time']) {
