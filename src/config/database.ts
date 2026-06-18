@@ -12,8 +12,12 @@ const {
   DB_POOL_ACQUIRE = '30000',
   DB_POOL_IDLE = '10000',
   DB_LOGGING = 'false',
+  DB_SSL,
   NODE_ENV,
 } = process.env;
+
+const useDbSsl =
+  DB_SSL === 'true' || (NODE_ENV === 'production' && DB_SSL !== 'false');
 
 const sequelize = new Sequelize({
   dialect: 'postgres',
@@ -33,17 +37,14 @@ const sequelize = new Sequelize({
     underscored: false,
     timestamps: true,
   },
-  dialectOptions:
-    NODE_ENV === 'production'
-      ? {
-          ssl: {
-            require: true,
-            rejectUnauthorized: false,
-          },
-        }
-      : {
-          ssl: false,
+  dialectOptions: useDbSsl
+    ? {
+        ssl: {
+          require: true,
+          rejectUnauthorized: false,
         },
+      }
+    : {},
 });
 
 export default sequelize;
