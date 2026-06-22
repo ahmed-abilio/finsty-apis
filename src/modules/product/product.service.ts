@@ -208,6 +208,63 @@ async function assertStoreOwnership(
   return store;
 }
 
+type ProductVisibilityInput = {
+  status?: 'draft' | 'active';
+  isActive?: boolean;
+  name?: string;
+  basePrice?: number;
+};
+
+function assertProductPublishable(name: string | null | undefined, basePrice: number): void {
+  if (!name || name.trim() === '') {
+    throw AppError.badRequest('Product must have a name before it can be published', 'PUBLISH_MISSING_NAME');
+  }
+  if (!basePrice || basePrice <= 0) {
+    throw AppError.badRequest(
+      'Product must have a valid base price before it can be published',
+      'PUBLISH_MISSING_BASE_PRICE',
+    );
+  }
+}
+
+/** Apply status / visibility changes without conflating deactivation with draft. */
+function resolveProductVisibilityPatch(
+  product: Product,
+  input: ProductVisibilityInput,
+): Partial<{ status: 'draft' | 'active'; isActive: boolean }> {
+  if (input.status === undefined && input.isActive === undefined) {
+    return {};
+  }
+
+  const patch: Partial<{ status: 'draft' | 'active'; isActive: boolean }> = {};
+
+  if (input.status === 'draft') {
+    patch.status = 'draft';
+    patch.isActive = false;
+    return patch;
+  }
+
+  if (input.status === 'active') {
+    assertProductPublishable(input.name ?? product.name, Number(input.basePrice ?? product.basePrice));
+    patch.status = 'active';
+    patch.isActive = input.isActive ?? true;
+    return patch;
+  }
+
+  if (input.isActive === true) {
+    assertProductPublishable(input.name ?? product.name, Number(input.basePrice ?? product.basePrice));
+    patch.status = 'active';
+    patch.isActive = true;
+    return patch;
+  }
+
+  if (input.isActive === false) {
+    patch.isActive = false;
+  }
+
+  return patch;
+}
+
 // Serialize a color with its nested images and variants
 function serializeColor(
   color: ProductColor,
@@ -563,16 +620,7 @@ class ProductService {
     }
 
     // Validate required fields when publishing via status change
-    if (input.status === 'active') {
-      const effectiveName = input.name ?? product.name;
-      const effectivePrice = input.basePrice ?? Number(product.basePrice);
-      if (!effectiveName || effectiveName.trim() === '') {
-        throw AppError.badRequest('Product must have a name before it can be published', 'PUBLISH_MISSING_NAME');
-      }
-      if (!effectivePrice || effectivePrice <= 0) {
-        throw AppError.badRequest('Product must have a valid base price before it can be published', 'PUBLISH_MISSING_BASE_PRICE');
-      }
-    }
+    const visibilityPatch = resolveProductVisibilityPatch(product, input);
 
     const updateData: any = { ...input };
     if (updateData.categoryId === '') updateData.categoryId = null;
@@ -587,6 +635,8 @@ class ProductService {
     if (input.discountEndDate !== undefined) {
       updateData.discountEndDate = input.discountEndDate ? new Date(input.discountEndDate) : null;
     }
+
+    Object.assign(updateData, visibilityPatch);
 
     await product.update(updateData);
     return this.findById(productId);
@@ -624,6 +674,8 @@ class ProductService {
     }
 
     return sequelize.transaction(async (t: Transaction) => {
+      const visibilityPatch = resolveProductVisibilityPatch(product, input);
+
       // 1. Update top-level product data + regenerate slug when name changes
       const updateData: any = {
         name: input.name,
@@ -641,6 +693,7 @@ class ProductService {
         lowStockAlert: input.lowStockAlert ?? false,
         isActive: input.isActive ?? product.isActive,
         inStock: input.inStock ?? product.inStock,
+        ...visibilityPatch,
       };
 
       if (input.name && input.name !== product.name) {
@@ -888,12 +941,7 @@ class ProductService {
     if (product.status === 'active') {
       throw AppError.badRequest('Product is already published', 'ALREADY_PUBLISHED');
     }
-    if (!product.name || product.name.trim() === '') {
-      throw AppError.badRequest('Product must have a name before it can be published', 'PUBLISH_MISSING_NAME');
-    }
-    if (!product.basePrice || Number(product.basePrice) <= 0) {
-      throw AppError.badRequest('Product must have a valid base price before it can be published', 'PUBLISH_MISSING_BASE_PRICE');
-    }
+    assertProductPublishable(product.name, Number(product.basePrice));
 
     await product.update({ status: 'active', isActive: true });
     return this.findById(productId);

@@ -1,8 +1,10 @@
 import crypto from 'crypto';
+import { Transaction } from 'sequelize';
 import User, { Roles, UserCreationAttributes } from './user.model';
 import { getRoleUserModel, RoleUserCreationAttributes } from './role-user.model';
 import { AppError } from '@utils/appError';
 import { AuthProvider } from '@types-app/index';
+import logger from '@utils/logger';
 
 export interface UpsertUserInput {
   firebaseUid: string;
@@ -215,6 +217,26 @@ class UserService {
   async deactivate(id: string, role: Roles = Roles.USER): Promise<void> {
     const user = await this.findByIdForRole(id, { role });
     await user.update({ isActive: false });
+  }
+
+  /** Sync isActive on the store owner across role-specific user tables. */
+  async setStoreOwnerActive(
+    id: string,
+    isActive: boolean,
+    transaction?: Transaction,
+  ): Promise<void> {
+    for (const role of [Roles.VENDOR, Roles.USER, Roles.ADMIN]) {
+      const RoleModel = getRoleUserModel(role);
+      const row = await RoleModel.findByPk(id, {
+        transaction,
+        ...(transaction ? { lock: transaction.LOCK.UPDATE } : {}),
+      });
+      if (row) {
+        await row.update({ isActive }, { transaction });
+        return;
+      }
+    }
+    logger.warn({ ownerId: id, isActive }, 'Store owner not found while syncing isActive');
   }
 
   async validateReferralCode(code: string): Promise<{ name: string | null } | null> {

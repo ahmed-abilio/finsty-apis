@@ -174,6 +174,7 @@ class StoreService {
           if (lockedOwner) {
             await lockedOwner.update({ role: Roles.VENDOR }, { transaction: t });
           }
+          await userService.setStoreOwnerActive(store.ownerId, true, t);
         }
       } else {
         await store.update({ onboardingStatus: 'REJECTED' }, { transaction: t });
@@ -346,7 +347,25 @@ class StoreService {
 
   async toggleActive(storeId: string, isActive: boolean): Promise<Store> {
     const store = await this.findById(storeId, true);
-    return store.update({ isActive });
+    const t = await sequelize.transaction();
+    try {
+      await store.update(
+        isActive
+          ? { isActive: true, onboardingStatus: 'APPROVED' }
+          : { isActive: false },
+        { transaction: t },
+      );
+      if (store.ownerId) {
+        await userService.setStoreOwnerActive(store.ownerId, isActive, t);
+      }
+      await t.commit();
+      return store.reload();
+    } catch (err) {
+      await t.rollback();
+      if (err instanceof AppError) throw err;
+      logger.error({ err, storeId, isActive }, 'Store active toggle failed');
+      throw AppError.internal('Failed to update store active status', 'STORE_TOGGLE_FAILED');
+    }
   }
 
   async findByOwner(ownerId: string): Promise<Store> {

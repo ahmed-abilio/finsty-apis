@@ -397,6 +397,7 @@ export const fullUpdateProductSchema: FastifySchema = {
       inStock: { type: 'boolean' },
       lowStockThreshold: { type: 'number', minimum: 0 },
       lowStockAlert: { type: 'boolean' },
+      status: { type: 'string', enum: ['draft', 'active'] },
       images: {
         type: 'array',
         items: {
