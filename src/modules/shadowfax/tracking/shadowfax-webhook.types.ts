@@ -13,7 +13,7 @@ export interface ShadowfaxWebhookPayload {
   rts_time?: string;
   cancel_reason?: string;
   cancel_reason_text?: string;
-  reason?: string;
+  reason?: string | number;
   reason_text?: string;
   drop_image_url?: string;
   rider_id?: number | string;
@@ -23,10 +23,19 @@ export interface ShadowfaxWebhookPayload {
     rider_name?: string;
     rider_phone?: string;
     rider_id?: number | string;
+    rider_location?: {
+      latitude?: string | number;
+      longitude?: string | number;
+    };
   };
   order_details?: {
     client_order_id?: string;
     delivery_time?: string;
+    cancel_reason?: string;
+    cancel_reason_text?: string;
+    reason?: string | number;
+    reason_text?: string;
+    last_update_time?: string;
   };
   [key: string]: unknown;
 }
@@ -44,6 +53,8 @@ export interface ShadowfaxRiderLocationPayload {
 export type OrderStatusSource =
   | 'shadowfax_webhook'
   | 'shadowfax_reconciliation'
+  | 'shadowfax_delivery_status'
+  | 'shadowfax_order_detail'
   | 'shadowfax_dev_local_callback'
   | 'vendor'
   | 'admin'

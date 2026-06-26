@@ -1,6 +1,7 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
 import { parseRevenueDateRange } from '@modules/store/vendorDashboard.utils';
 import { AppError } from '@utils/appError';
+import { Roles } from '@modules/user/user.model';
 import orderService, { CreateOrderInput } from './order.service';
 
 interface OrderParams {
@@ -24,6 +25,15 @@ export interface VendorListOrdersQuery extends ListOrdersQuery {
 
 interface UpdateStatusBody {
   status: string;
+}
+
+interface CancelOrderBody {
+  reason?: string;
+  user?: 'Customer' | 'Seller';
+}
+
+interface VendorDispatchReadyBody {
+  shipment_ready_timestamp: string;
 }
 
 class OrderController {
@@ -104,7 +114,16 @@ class OrderController {
     request: FastifyRequest<{ Params: OrderParams }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const order = await orderService.getOrderById(request.params.orderId, request.user.sub);
+    const { orderId } = request.params;
+    const { sub, role } = request.user;
+
+    if (role === Roles.VENDOR) {
+      const order = await orderService.getVendorOrderById(orderId, sub);
+      void reply.status(200).send({ success: true, data: { order } });
+      return;
+    }
+
+    const order = await orderService.getOrderById(orderId, sub);
     void reply.status(200).send({ success: true, data: { order } });
   }
 
@@ -121,10 +140,15 @@ class OrderController {
   }
 
   async cancel(
-    request: FastifyRequest<{ Params: OrderParams }>,
+    request: FastifyRequest<{ Params: OrderParams; Body: CancelOrderBody }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const order = await orderService.cancelOrder(request.params.orderId, request.user.sub);
+    const order = await orderService.cancelOrder(
+      request.params.orderId,
+      request.user.sub,
+      request.body ?? {},
+      request.user.role,
+    );
     void reply.status(200).send({ success: true, data: { order } });
   }
 
@@ -142,6 +166,18 @@ class OrderController {
   ): Promise<void> {
     const order = await orderService.updateStatus(request.params.orderId, request.body.status);
     void reply.status(200).send({ success: true, data: { order } });
+  }
+
+  async vendorDispatchReady(
+    request: FastifyRequest<{ Params: OrderParams; Body: VendorDispatchReadyBody }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const result = await orderService.markVendorOrderDispatchReady(
+      request.params.orderId,
+      request.user.sub,
+      request.body,
+    );
+    void reply.status(200).send(result);
   }
 
   async vendorUpdateStatus(

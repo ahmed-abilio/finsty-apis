@@ -16,7 +16,7 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   rider_assigned: 'Rider assigned',
   at_store: 'At store',
   picked_up: 'Picked up',
-  out_for_delivery: 'Out for delivery',
+  arrived: 'Arrived',
   delivered: 'Delivered',
   cancelled: 'Cancelled',
   returned: 'Returned',

@@ -5,8 +5,8 @@ const FORWARD: Record<OrderStatus, OrderStatus[]> = {
   confirmed: ['rider_assigned'],
   rider_assigned: ['at_store'],
   at_store: ['picked_up'],
-  picked_up: ['out_for_delivery'],
-  out_for_delivery: ['delivered'],
+  picked_up: ['arrived'],
+  arrived: ['delivered'],
   delivered: ['returned'],
   cancelled: [],
   returned: [],
@@ -18,7 +18,7 @@ const CANCELLABLE: OrderStatus[] = [
   'rider_assigned',
   'at_store',
   'picked_up',
-  'out_for_delivery',
+  'arrived',
 ];
 
 export interface TransitionOptions {
@@ -52,11 +52,11 @@ export function assertTransition(
 
 /** Vendor/admin manual overrides beyond strict forward chain */
 const MANUAL_EXTRA: Partial<Record<OrderStatus, OrderStatus[]>> = {
-  confirmed: ['at_store', 'picked_up', 'out_for_delivery', 'delivered', 'cancelled'],
-  rider_assigned: ['picked_up', 'out_for_delivery', 'delivered', 'cancelled'],
-  at_store: ['out_for_delivery', 'delivered', 'cancelled'],
+  confirmed: ['at_store', 'picked_up', 'arrived', 'delivered', 'cancelled'],
+  rider_assigned: ['picked_up', 'arrived', 'delivered', 'cancelled'],
+  at_store: ['arrived', 'delivered', 'cancelled'],
   picked_up: ['delivered', 'cancelled'],
-  out_for_delivery: ['cancelled'],
+  arrived: ['cancelled'],
 };
 
 export function canManualTransition(
@@ -70,4 +70,23 @@ export function canManualTransition(
   }
   const extras = MANUAL_EXTRA[from] ?? [];
   return extras.includes(to);
+}
+
+/** Shadowfax may skip steps and return-to-seller before a strict delivered state. */
+const SHADOWFAX_RETURNABLE: OrderStatus[] = [
+  'rider_assigned',
+  'at_store',
+  'picked_up',
+  'arrived',
+  'delivered',
+];
+
+export function canShadowfaxTransition(
+  from: OrderStatus,
+  to: OrderStatus,
+  options: TransitionOptions = {},
+): boolean {
+  if (canManualTransition(from, to, options)) return true;
+  if (to === 'returned' && SHADOWFAX_RETURNABLE.includes(from)) return true;
+  return false;
 }

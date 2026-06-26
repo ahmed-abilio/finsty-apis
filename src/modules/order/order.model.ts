@@ -7,7 +7,7 @@ export type OrderStatus =
   | 'rider_assigned'
   | 'at_store'
   | 'picked_up'
-  | 'out_for_delivery'
+  | 'arrived'
   | 'delivered'
   | 'cancelled'
   | 'returned';

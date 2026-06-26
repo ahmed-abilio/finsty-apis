@@ -1,4 +1,8 @@
 import type { ShadowfaxWebhookPayload } from './shadowfax-webhook.types';
+import {
+  isShadowfaxCancelledStatus,
+  isShadowfaxReturnedStatus,
+} from './shadowfax-status.mapper';
 
 function normalizeTimestamp(value: unknown): string {
   if (value == null || value === '') return new Date(0).toISOString();
@@ -13,10 +17,10 @@ function pickTimestamp(payload: ShadowfaxWebhookPayload): string {
   if (status === 'DELIVERED' && payload.delivery_time) {
     return normalizeTimestamp(payload.delivery_time);
   }
-  if ((status === 'CANCELLED' || status === 'CANCELLED_BY_CUSTOMER') && payload.cancel_time) {
+  if (isShadowfaxCancelledStatus(status) && payload.cancel_time) {
     return normalizeTimestamp(payload.cancel_time);
   }
-  if (status === 'RETURNED_TO_SELLER' && payload.rts_time) {
+  if (isShadowfaxReturnedStatus(status) && payload.rts_time) {
     return normalizeTimestamp(payload.rts_time);
   }
   if (payload.event_time) return normalizeTimestamp(payload.event_time);

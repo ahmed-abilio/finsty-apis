@@ -11,6 +11,7 @@ import {
   payWithWalletSchema,
   adminUpdateStatusSchema,
   vendorGetOrderSchema,
+  vendorDispatchReadySchema,
   vendorUpdateStatusSchema,
 } from './order.schema';
 import { Roles } from '@modules/user/user.model';
@@ -56,6 +57,15 @@ export default async function orderRoutes(fastify: FastifyInstance): Promise<voi
       schema: vendorUpdateStatusSchema,
     },
     orderController.vendorUpdateStatus.bind(orderController),
+  );
+
+  fastify.put<{ Params: { orderId: string }; Body: { shipment_ready_timestamp: string } }>(
+    '/vendor/:orderId/dispatch-ready',
+    {
+      preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
+      schema: vendorDispatchReadySchema,
+    },
+    orderController.vendorDispatchReady.bind(orderController),
   );
 
   fastify.get(

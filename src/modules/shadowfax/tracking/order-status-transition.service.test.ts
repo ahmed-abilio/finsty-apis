@@ -80,4 +80,64 @@ describe('order-status-transition.service', () => {
     expect(result.reason).toBe('invalid_transition');
     expect(appendHistory).not.toHaveBeenCalled();
   });
+
+  it('allows Shadowfax skip from rider_assigned to picked_up via source', async () => {
+    const order = {
+      id: 'order-1',
+      userId: 'user-1',
+      status: 'rider_assigned',
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    findByPk.mockResolvedValue(order as never);
+
+    const result = await transitionOrderStatus({
+      orderId: 'order-1',
+      toStatus: 'picked_up',
+      source: 'shadowfax_webhook',
+    });
+
+    expect(result.applied).toBe(true);
+    expect(appendHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oldStatus: 'rider_assigned',
+        newStatus: 'picked_up',
+      }),
+    );
+  });
+
+  it('allows Shadowfax cancel from picked_up via source', async () => {
+    const order = {
+      id: 'order-1',
+      userId: 'user-1',
+      status: 'picked_up',
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    findByPk.mockResolvedValue(order as never);
+
+    const result = await transitionOrderStatus({
+      orderId: 'order-1',
+      toStatus: 'cancelled',
+      source: 'shadowfax_delivery_status',
+    });
+
+    expect(result.applied).toBe(true);
+  });
+
+  it('allows Shadowfax return from arrived via source', async () => {
+    const order = {
+      id: 'order-1',
+      userId: 'user-1',
+      status: 'arrived',
+      update: vi.fn().mockResolvedValue(undefined),
+    };
+    findByPk.mockResolvedValue(order as never);
+
+    const result = await transitionOrderStatus({
+      orderId: 'order-1',
+      toStatus: 'returned',
+      source: 'shadowfax_reconciliation',
+    });
+
+    expect(result.applied).toBe(true);
+  });
 });

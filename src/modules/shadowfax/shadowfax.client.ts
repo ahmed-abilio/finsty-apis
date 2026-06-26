@@ -1,5 +1,7 @@
 import { AppError } from '@utils/appError';
 import {
+  getCancelOrderUrl,
+  getDispatchReadyUrl,
   getOrderServiceabilityUrl,
   getOrderStatusUrl,
   getPlaceOrderUrl,
@@ -7,6 +9,8 @@ import {
   getShadowfaxConfig,
   getShadowfaxRequestTimeoutMs,
 } from './shadowfax.config';
+import type { ShadowfaxCancelOrderRequest } from './shadowfaxCancel.types';
+import type { ShadowfaxDispatchReadyRequest } from './shadowfaxDispatchReady.types';
 import type { ShadowfaxPlaceOrderRequest } from './shadowfaxPlaceOrder.types';
 
 export interface OrderServiceabilityRequest {
@@ -119,6 +123,32 @@ class ShadowfaxClient {
       getOrderStatusUrl(shadowfaxOrderId),
       undefined,
       'Shadowfax order status fetch failed',
+      { client_code: getShadowfaxClientCode() },
+    );
+  }
+
+  async cancelOrder(
+    shadowfaxOrderId: string,
+    body: ShadowfaxCancelOrderRequest,
+  ): Promise<unknown> {
+    return requestJson(
+      'PUT',
+      getCancelOrderUrl(shadowfaxOrderId),
+      body,
+      'Shadowfax order cancel failed',
+      { client_code: getShadowfaxClientCode() },
+    );
+  }
+
+  async markDispatchReady(
+    clientOrderId: string,
+    body: ShadowfaxDispatchReadyRequest,
+  ): Promise<unknown> {
+    return requestJson(
+      'PUT',
+      getDispatchReadyUrl(clientOrderId),
+      body,
+      'Shadowfax dispatch-ready failed',
       { client_code: getShadowfaxClientCode() },
     );
   }

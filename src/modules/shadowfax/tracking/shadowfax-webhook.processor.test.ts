@@ -48,7 +48,7 @@ describe('shadowfax-webhook.processor', () => {
     transition.mockResolvedValue({
       applied: true,
       order: {} as never,
-      oldStatus: 'out_for_delivery',
+      oldStatus: 'arrived',
       newStatus: 'delivered',
     });
 

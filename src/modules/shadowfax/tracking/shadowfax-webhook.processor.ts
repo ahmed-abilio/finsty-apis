@@ -1,7 +1,15 @@
 import type { OrderStatus } from '@modules/order/order.model';
 import logger from '@utils/logger';
 import { incrementShadowfaxMetric } from '@observability/shadowfax.metrics';
-import { mapShadowfaxStatusToInternal } from './shadowfax-status.mapper';
+import {
+  isShadowfaxCancelledStatus,
+  isShadowfaxReturnedStatus,
+  mapShadowfaxStatusToInternal,
+} from './shadowfax-status.mapper';
+import {
+  extractShadowfaxCancelFields,
+  mapShadowfaxCancelStatusToLabel,
+} from './shadowfax-cancel-fields';
 import { transitionOrderStatus } from './order-status-transition.service';
 import { resolveOrderByClientOrderId } from './order-lookup.service';
 import { markWebhookEventProcessed } from './shadowfax-webhook-event.repository';
@@ -57,11 +65,27 @@ export function buildOrderPatch(
     payload.rider_phone ?? payload.rider_details?.rider_phone ?? undefined;
   const riderIdRaw = payload.rider_id ?? payload.rider_details?.rider_id;
   const riderId = riderIdRaw != null ? Number(riderIdRaw) : null;
+  const riderLocation = payload.rider_details?.rider_location;
 
-  if (shadowfaxStatus === 'ALLOTTED') {
+  const hasRiderUpdate =
+    riderName ||
+    riderPhone ||
+    (riderId != null && Number.isFinite(riderId)) ||
+    riderLocation;
+
+  if (
+    hasRiderUpdate &&
+    !isShadowfaxCancelledStatus(shadowfaxStatus) &&
+    !isShadowfaxReturnedStatus(shadowfaxStatus)
+  ) {
     if (riderName) patch.riderName = String(riderName);
     if (riderPhone) patch.riderPhone = String(riderPhone);
     if (riderId != null && Number.isFinite(riderId)) patch.riderId = riderId;
+    if (riderLocation) {
+      patch.deliveryMetadata = mergeDeliveryMetadata(existingMetadata, {
+        rider_location: riderLocation,
+      });
+    }
   }
 
   if (shadowfaxStatus === 'DELIVERED') {
@@ -73,15 +97,25 @@ export function buildOrderPatch(
     }
   }
 
-  if (shadowfaxStatus === 'CANCELLED' || shadowfaxStatus === 'CANCELLED_BY_CUSTOMER') {
+  if (isShadowfaxCancelledStatus(shadowfaxStatus)) {
+    const { cancelReasonCode, cancelReasonText, shadowfaxCancelStatus } =
+      extractShadowfaxCancelFields({
+        ...payload,
+        status: shadowfaxStatus,
+        order_status: shadowfaxStatus,
+      });
+    const cancelLabel =
+      mapShadowfaxCancelStatusToLabel(shadowfaxCancelStatus ?? shadowfaxStatus);
     patch.cancelledAt = parseDate(payload.cancel_time);
     patch.deliveryMetadata = mergeDeliveryMetadata(existingMetadata, {
-      cancel_reason: payload.cancel_reason ?? payload.reason ?? null,
-      cancel_reason_text: payload.cancel_reason_text ?? payload.reason_text ?? null,
+      shadowfax_cancel_status: shadowfaxCancelStatus ?? shadowfaxStatus,
+      cancel_reason_code: cancelReasonCode,
+      cancel_reason_text: cancelReasonText,
+      cancel_reason: cancelLabel,
     });
   }
 
-  if (shadowfaxStatus === 'RETURNED_TO_SELLER') {
+  if (isShadowfaxReturnedStatus(shadowfaxStatus)) {
     patch.returnedAt = parseDate(payload.rts_time);
   }
 
@@ -132,7 +166,6 @@ export async function processShadowfaxWebhookEvent(eventId: string): Promise<voi
       source: 'shadowfax_webhook',
       payload,
       orderPatch,
-      allowManual: false,
     });
 
     const remarks = result.applied

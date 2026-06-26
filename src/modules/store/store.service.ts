@@ -305,6 +305,12 @@ class StoreService {
     if (data.storeCategories !== undefined) {
       await this.validateStoreCategories(data.storeCategories);
     }
+    if (data.isActive === true && store.onboardingStatus !== 'APPROVED') {
+      throw AppError.badRequest(
+        'Store must be approved before it can be activated. Use PATCH /stores/:storeId/approval first.',
+        'STORE_NOT_APPROVED',
+      );
+    }
     return store.update(data);
   }
 
@@ -347,14 +353,16 @@ class StoreService {
 
   async toggleActive(storeId: string, isActive: boolean): Promise<Store> {
     const store = await this.findById(storeId, true);
+    if (isActive && store.onboardingStatus !== 'APPROVED') {
+      throw AppError.badRequest(
+        'Store must be approved before it can be activated. Use PATCH /stores/:storeId/approval first.',
+        'STORE_NOT_APPROVED',
+      );
+    }
+
     const t = await sequelize.transaction();
     try {
-      await store.update(
-        isActive
-          ? { isActive: true, onboardingStatus: 'APPROVED' }
-          : { isActive: false },
-        { transaction: t },
-      );
+      await store.update({ isActive }, { transaction: t });
       if (store.ownerId) {
         await userService.setStoreOwnerActive(store.ownerId, isActive, t);
       }

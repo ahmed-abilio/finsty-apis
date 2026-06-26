@@ -376,6 +376,34 @@ export const orderObject = {
     riderId: { type: 'number', nullable: true },
     riderName: { type: 'string', nullable: true },
     riderPhone: { type: 'string', nullable: true },
+    riderDetails: {
+      type: 'object',
+      nullable: true,
+      description: 'Assigned delivery rider (from Shadowfax sync).',
+      properties: {
+        id: { type: 'number', nullable: true },
+        name: { type: 'string', nullable: true },
+        phone: { type: 'string', nullable: true },
+        location: {
+          type: 'object',
+          nullable: true,
+          properties: {
+            latitude: { type: 'string', nullable: true },
+            longitude: { type: 'string', nullable: true },
+          },
+        },
+      },
+    },
+    cancellation: {
+      type: 'object',
+      nullable: true,
+      description: 'Shadowfax / logistics cancellation details when applicable.',
+      properties: {
+        cancelledAt: { type: 'string', nullable: true, format: 'date-time' },
+        reason: { type: 'string', nullable: true, description: 'Cancellation type label e.g. Cancelled by Customer' },
+        reasonText: { type: 'string', nullable: true, description: 'Detail text for the cancel reason code e.g. Damaged products' },
+      },
+    },
     deliveryMetadata: { type: 'object', nullable: true, additionalProperties: true },
     payments: { type: 'array', items: paymentObject },
     deliveryWaivedReason: {
@@ -649,12 +677,32 @@ export const getOrderSchema: FastifySchema = {
 export const cancelOrderSchema: FastifySchema = {
   tags: ['Orders'],
   summary: 'Cancel an order',
-  description: 'Only orders with status `pending` or `confirmed` can be cancelled.',
+  description:
+    'Buyers (`user: "Customer"`) and vendors (`user: "Seller"`) can cancel via this endpoint. ' +
+    'Buyers may cancel only `pending` or `confirmed` orders. Vendors may cancel store orders in any cancellable in-flight status. ' +
+    'For confirmed delivery orders already placed on Shadowfax, `reason` and `user` are forwarded to the Shadowfax cancel API.',
   security: [{ BearerAuth: [] }],
   params: {
     type: 'object',
     required: ['orderId'],
     properties: { orderId: orderRefParam },
+  },
+  body: {
+    type: 'object',
+    properties: {
+      reason: {
+        type: 'string',
+        minLength: 1,
+        description:
+          'Human-readable cancel reason sent to Shadowfax (e.g. `Damaged products`). Defaults to `Cancelled by customer`.',
+      },
+      user: {
+        type: 'string',
+        enum: ['Customer', 'Seller'],
+        description: 'Shadowfax cancel actor. Defaults to `Customer` for buyers and `Seller` for vendors.',
+      },
+    },
+    additionalProperties: false,
   },
   response: {
     200: {
@@ -800,6 +848,7 @@ export const vendorGetOrderSchema: FastifySchema = {
   summary: 'GET /orders/vendor/{orderId} — order detail with customer (vendor)',
   description:
     'Returns full order details when the order contains at least one line item from the authenticated vendor\'s store. ' +
+    'Shadowfax status, rider details, and cancellation metadata are synced on read (same as buyer `GET /orders/:orderId`). ' +
     'Includes the same fields as `GET /orders/vendor` list items (items, address, payments, `walletAmountPaid`, `shadowfaxOrderId`) ' +
     'plus a `customer` object (`id`, `name`, `phone`, `email`, `profileImage`) for the buyer. ' +
     'Returns 404 if the order does not exist or is not accessible to this vendor.',
@@ -826,6 +875,56 @@ export const vendorGetOrderSchema: FastifySchema = {
       },
     },
     404: notFound,
+  },
+};
+
+// ─── PUT /orders/vendor/:orderId/dispatch-ready ──────────────────────────────
+
+export const vendorDispatchReadySchema: FastifySchema = {
+  tags: ['Orders'],
+  summary: 'Mark order dispatch-ready (vendor)',
+  description:
+    'Notifies Shadowfax that the seller has packed the order and it is ready for rider pickup. ' +
+    'Shadowfax expects the Finsty order UUID (`client_order_id`) in the upstream URL. ' +
+    'Only delivery orders in `confirmed`, `rider_assigned`, or `at_store` status with a placed Shadowfax shipment are eligible.',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['orderId'],
+    properties: { orderId: orderRefParam },
+  },
+  body: {
+    type: 'object',
+    required: ['shipment_ready_timestamp'],
+    properties: {
+      shipment_ready_timestamp: {
+        type: 'string',
+        format: 'date-time',
+        description: 'ISO-8601 timestamp when the order became ready for dispatch.',
+      },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', additionalProperties: true },
+      },
+    },
+    400: badRequest,
+    401: unauthorized,
+    403: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+    404: notFound,
+    409: conflict,
+    502: badRequest,
   },
 };
 

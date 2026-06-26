@@ -6,10 +6,22 @@ vi.mock('@modules/shadowfax/shadowfax-shipment.model', () => ({
   },
 }));
 
+vi.mock('./order.model', () => ({
+  default: { findOne: vi.fn() },
+}));
+
+vi.mock('@modules/user/user.model', () => ({
+  default: { findByPk: vi.fn() },
+}));
+
 import ShadowfaxShipment from '@modules/shadowfax/shadowfax-shipment.model';
-import { buildOrderRefWhere } from './orderRef';
+import Order from './order.model';
+import User from '@modules/user/user.model';
+import { buildOrderRefWhere, throwIfOrderRefLooksLikeUserId } from './orderRef';
 
 const findOne = vi.mocked(ShadowfaxShipment.findOne);
+const orderFindOne = vi.mocked(Order.findOne);
+const userFindByPk = vi.mocked(User.findByPk);
 
 describe('buildOrderRefWhere', () => {
   beforeEach(() => {
@@ -40,5 +52,30 @@ describe('buildOrderRefWhere', () => {
   it('falls back to public order code column for other refs', async () => {
     findOne.mockResolvedValue(null);
     await expect(buildOrderRefWhere('21042820')).resolves.toEqual({ orderId: '21042820' });
+  });
+});
+
+describe('throwIfOrderRefLooksLikeUserId', () => {
+  beforeEach(() => {
+    orderFindOne.mockReset();
+    userFindByPk.mockReset();
+  });
+
+  it('throws when UUID is a user id but not an order id', async () => {
+    const userId = 'c3c34069-3cc7-4093-bb4f-6b54f6b1ddc3';
+    orderFindOne.mockResolvedValue(null);
+    userFindByPk.mockResolvedValue({ id: userId } as User);
+
+    await expect(throwIfOrderRefLooksLikeUserId(userId)).rejects.toMatchObject({
+      code: 'ORDER_REF_IS_USER_ID',
+    });
+  });
+
+  it('does nothing when UUID is a valid order id', async () => {
+    const orderId = 'a124ce11-585c-4c6f-b679-03d8a0835e9a';
+    orderFindOne.mockResolvedValue({ id: orderId } as Order);
+
+    await expect(throwIfOrderRefLooksLikeUserId(orderId)).resolves.toBeUndefined();
+    expect(userFindByPk).not.toHaveBeenCalled();
   });
 });

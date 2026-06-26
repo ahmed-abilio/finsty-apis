@@ -34,12 +34,80 @@ export function getPlaceOrderUrl(): string {
 
 /** GET target for Shadowfax HL marketplace order status (v2). Template must include `{id}`. */
 export function getOrderStatusUrl(shadowfaxOrderId: string): string {
-  const template = requireEnv('SHADOWFAX_ORDER_STATUS_URL');
-  if (!template.includes('{id}')) {
-    throw AppError.internal(
-      'SHADOWFAX_ORDER_STATUS_URL must include {id} for the Shadowfax order id.',
-      'SHADOWFAX_CONFIG_INVALID',
+  return buildShadowfaxOrderIdUrl(
+    'SHADOWFAX_ORDER_STATUS_URL',
+    shadowfaxOrderId,
+    'SHADOWFAX_ORDER_STATUS_URL must include {id} for the Shadowfax order id.',
+  );
+}
+
+/** PUT target for Shadowfax HL marketplace order cancel (v2). Template must include `{id}`. */
+export function getCancelOrderUrl(shadowfaxOrderId: string): string {
+  const explicit = process.env.SHADOWFAX_CANCEL_ORDER_URL?.trim();
+  if (explicit) {
+    return buildShadowfaxOrderIdUrl(
+      'SHADOWFAX_CANCEL_ORDER_URL',
+      shadowfaxOrderId,
+      'SHADOWFAX_CANCEL_ORDER_URL must include {id} for the Shadowfax order id.',
+      explicit,
     );
+  }
+
+  const statusTemplate = process.env.SHADOWFAX_ORDER_STATUS_URL?.trim();
+  if (statusTemplate?.includes('{id}') && /\/status\/?$/i.test(statusTemplate)) {
+    const cancelTemplate = statusTemplate.replace(/\/status\/?$/i, '/cancel/');
+    return buildShadowfaxOrderIdUrl(
+      'SHADOWFAX_ORDER_STATUS_URL',
+      shadowfaxOrderId,
+      'SHADOWFAX_ORDER_STATUS_URL must include {id} for the Shadowfax order id.',
+      cancelTemplate,
+    );
+  }
+
+  throw AppError.internal(
+    'Shadowfax cancel URL is not configured. Set SHADOWFAX_CANCEL_ORDER_URL or SHADOWFAX_ORDER_STATUS_URL with {id}.',
+    'SHADOWFAX_CONFIG_INVALID',
+  );
+}
+
+/** PUT target for Shadowfax HL marketplace dispatch-ready (v2). Template must include `{id}` (client_order_id). */
+export function getDispatchReadyUrl(clientOrderId: string): string {
+  const explicit = process.env.SHADOWFAX_DISPATCH_READY_URL?.trim();
+  if (explicit) {
+    return buildShadowfaxOrderIdUrl(
+      'SHADOWFAX_DISPATCH_READY_URL',
+      clientOrderId,
+      'SHADOWFAX_DISPATCH_READY_URL must include {id} for the Shadowfax client order id.',
+      explicit,
+    );
+  }
+
+  const statusTemplate = process.env.SHADOWFAX_ORDER_STATUS_URL?.trim();
+  if (statusTemplate?.includes('{id}') && /\/status\/?$/i.test(statusTemplate)) {
+    const dispatchReadyTemplate = statusTemplate.replace(/\/status\/?$/i, '/dispatch-ready/');
+    return buildShadowfaxOrderIdUrl(
+      'SHADOWFAX_ORDER_STATUS_URL',
+      clientOrderId,
+      'SHADOWFAX_ORDER_STATUS_URL must include {id} for the Shadowfax client order id.',
+      dispatchReadyTemplate,
+    );
+  }
+
+  throw AppError.internal(
+    'Shadowfax dispatch-ready URL is not configured. Set SHADOWFAX_DISPATCH_READY_URL or SHADOWFAX_ORDER_STATUS_URL with {id}.',
+    'SHADOWFAX_CONFIG_INVALID',
+  );
+}
+
+function buildShadowfaxOrderIdUrl(
+  envName: string,
+  shadowfaxOrderId: string,
+  missingIdMessage: string,
+  templateOverride?: string,
+): string {
+  const template = templateOverride ?? requireEnv(envName);
+  if (!template.includes('{id}')) {
+    throw AppError.internal(missingIdMessage, 'SHADOWFAX_CONFIG_INVALID');
   }
   const id = encodeURIComponent(shadowfaxOrderId);
   return template.replace(/\{id\}/g, id);

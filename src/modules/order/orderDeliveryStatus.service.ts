@@ -1,50 +1,11 @@
-import { Op, type WhereOptions } from 'sequelize';
-import sequelize from '@config/database';
-import Order from './order.model';
-import Store from '@modules/store/store.model';
 import ShadowfaxShipment from '@modules/shadowfax/shadowfax-shipment.model';
-import shadowfaxStatusService from '@modules/shadowfax/shadowfaxStatus.service';
 import type { ShadowfaxOrderStatusData } from '@modules/shadowfax/shadowfaxOrderStatus.types';
-import { syncOrderFromShadowfaxStatusIfDevCallbackEnabled } from '@modules/shadowfax/tracking/shadowfax-dev-local-callback.service';
+import { fetchAndSyncShadowfaxDeliveryStatus } from './orderShadowfaxSync.service';
 import { AppError } from '@utils/appError';
 import { buildOrderRefWhere } from './orderRef';
+import { findOrderForCaller, type OrderCaller } from './orderCallerAccess';
 
-export interface DeliveryStatusCaller {
-  userId: string;
-  role: string;
-}
-
-async function findOrderForDeliveryStatus(
-  orderRefWhere: WhereOptions,
-  caller: DeliveryStatusCaller,
-): Promise<Pick<Order, 'id' | 'deliveryType'> | null> {
-  const attributes = ['id', 'deliveryType'] as const;
-
-  if (caller.role === 'admin') {
-    return Order.findOne({ where: orderRefWhere, attributes: [...attributes] });
-  }
-
-  if (caller.role === 'vendor') {
-    const store = await Store.findOne({ where: { ownerId: caller.userId } });
-    if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
-
-    const storeOrderIds = sequelize.literal(
-      `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(store.id)})`,
-    );
-
-    return Order.findOne({
-      where: {
-        [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
-      },
-      attributes: [...attributes],
-    });
-  }
-
-  return Order.findOne({
-    where: { ...orderRefWhere, userId: caller.userId },
-    attributes: [...attributes],
-  });
-}
+export type DeliveryStatusCaller = OrderCaller;
 
 export async function getOrderDeliveryStatus(
   orderRef: string,
@@ -52,7 +13,9 @@ export async function getOrderDeliveryStatus(
 ): Promise<ShadowfaxOrderStatusData> {
   const orderRefWhere = await buildOrderRefWhere(orderRef);
 
-  const order = await findOrderForDeliveryStatus(orderRefWhere, caller);
+  const order = await findOrderForCaller(orderRefWhere, caller, {
+    attributes: ['id', 'deliveryType'],
+  });
   if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
 
   if (order.deliveryType !== 'delivery') {
@@ -70,13 +33,14 @@ export async function getOrderDeliveryStatus(
     );
   }
 
-  const status = await shadowfaxStatusService.fetchOrderStatus(shipment.shadowfaxOrderId);
+  const status = await fetchAndSyncShadowfaxDeliveryStatus(order.id);
 
-  if (!status.track_url && shipment.trackUrl) {
-    status.track_url = shipment.trackUrl;
+  if (!status) {
+    throw AppError.conflict(
+      'Shadowfax delivery has not been placed yet. Try again shortly after payment is confirmed.',
+      'SHADOWFAX_ORDER_NOT_PLACED',
+    );
   }
-
-  await syncOrderFromShadowfaxStatusIfDevCallbackEnabled(order.id, status);
 
   return status;
 }

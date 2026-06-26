@@ -23,6 +23,13 @@ export interface ShadowfaxOrderStatusDetails {
   delivery_time: string | null;
   vehicle_number: string | null;
   order_date: string;
+  cancel_time?: string | null;
+  rts_time?: string | null;
+  cancel_reason?: string | null;
+  cancel_reason_text?: string | null;
+  reason?: string | number | null;
+  reason_text?: string | null;
+  last_update_time?: string | null;
 }
 
 export interface ShadowfaxLocationSummary {
@@ -58,6 +65,12 @@ export interface ShadowfaxOrderStatusData {
   order_items: ShadowfaxOrderStatusItem[];
   track_url: string | null;
   drop_image_url?: string | null;
+  cancel_time?: string | null;
+  rts_time?: string | null;
+  cancel_reason?: string | null;
+  cancel_reason_text?: string | null;
+  reason?: string | number | null;
+  reason_text?: string | null;
   pickup_details: ShadowfaxPickupDetails;
 }
 

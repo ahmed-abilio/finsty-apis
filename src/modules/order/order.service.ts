@@ -34,12 +34,23 @@ import { resolveDeliveryQuote } from '@modules/delivery/deliveryQuote.service';
 import addressService from '@modules/address/address.service';
 import { buildShadowfaxReplayFromSubtotal } from '@modules/shadowfax/shadowfaxDelivery';
 import { scheduleShadowfaxPlacementIfDelivery } from '@modules/shadowfax/shadowfaxPlacement.service';
+import { cancelShadowfaxOrderForFinstyOrder } from '@modules/shadowfax/shadowfaxCancel.service';
+import type { ShadowfaxCancelUser } from '@modules/shadowfax/shadowfaxCancel.types';
+import { markShadowfaxDispatchReadyForFinstyOrder } from '@modules/shadowfax/shadowfaxDispatchReady.service';
+import type { ShadowfaxDispatchReadyRequest } from '@modules/shadowfax/shadowfaxDispatchReady.types';
 import { getOrderDeliveryStatus } from './orderDeliveryStatus.service';
+import {
+  extractCancellationFromOrder,
+  extractRiderDetailsFromOrder,
+} from './orderDeliveryPresentation';
+import { maybeSyncOrderShadowfaxStatusForOrderDetail } from './orderShadowfaxSync.service';
 import { buildWalletPaidByOrderIds, resolveWalletAmountPaid } from './orderWalletPaid';
 import { buildShadowfaxOrderIdByOrderIds, resolveShadowfaxOrderId } from './orderShadowfax';
-import { buildOrderRefWhere } from './orderRef';
+import { buildOrderRefWhere, throwIfOrderRefLooksLikeUserId } from './orderRef';
+import { findOrderForCaller, resolveShadowfaxCancelActor } from './orderCallerAccess';
 import { normalizeOrderStatusInput } from './order-status.constants';
 import { transitionOrderStatus } from '@modules/shadowfax/tracking/order-status-transition.service';
+import { canManualTransition } from '@modules/shadowfax/tracking/order-status.fsm';
 import { publishOrderStatusChanged } from '@modules/shadowfax/tracking/order-status.publisher';
 import type { ShadowfaxOrderStatusData } from '@modules/shadowfax/shadowfaxOrderStatus.types';
 import { computeTaxOnSubtotal, getPlatformFee } from '@config/pricing.config';
@@ -474,11 +485,27 @@ class OrderService {
     );
 
     const orderRefWhere = await buildOrderRefWhere(orderId);
+    const vendorOrderWhere = {
+      [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
+    };
+
+    const orderStub = await Order.findOne({
+      where: vendorOrderWhere,
+      attributes: ['id', 'deliveryType', 'status'],
+    });
+    if (!orderStub) {
+      await throwIfOrderRefLooksLikeUserId(orderId);
+      throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+    }
+
+    await maybeSyncOrderShadowfaxStatusForOrderDetail(
+      orderStub.id,
+      orderStub.deliveryType,
+      orderStub.status,
+    );
 
     const order = await Order.findOne({
-      where: {
-        [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
-      },
+      where: vendorOrderWhere,
       include: [
         {
           model: OrderItem,
@@ -488,7 +515,10 @@ class OrderService {
               model: Product,
               as: 'product',
               attributes: ['id', 'storeId'],
-              include: [{ model: ProductImage, as: 'images' }],
+              include: [
+                { model: Store, as: 'store' },
+                { model: ProductImage, as: 'images' },
+              ],
             },
             {
               model: ProductVariant,
@@ -609,6 +639,21 @@ class OrderService {
   async getOrderById(orderId: string, userId: string) {
     const orderRefWhere = await buildOrderRefWhere(orderId);
 
+    const orderStub = await Order.findOne({
+      where: { ...orderRefWhere, userId },
+      attributes: ['id', 'deliveryType', 'status'],
+    });
+    if (!orderStub) {
+      await throwIfOrderRefLooksLikeUserId(orderId);
+      throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+    }
+
+    await maybeSyncOrderShadowfaxStatusForOrderDetail(
+      orderStub.id,
+      orderStub.deliveryType,
+      orderStub.status,
+    );
+
     const order = await Order.findOne({
       where: { ...orderRefWhere, userId },
       include: [
@@ -665,16 +710,33 @@ class OrderService {
 
   // ─── Cancel ───────────────────────────────────────────────────────────────────
 
-  async cancelOrder(orderId: string, userId: string) {
+  async cancelOrder(
+    orderId: string,
+    callerId: string,
+    shadowfaxCancel: { reason?: string; user?: ShadowfaxCancelUser } = {},
+    role = 'user',
+  ) {
     const orderRefWhere = await buildOrderRefWhere(orderId);
 
-    const order = await Order.findOne({
-      where: { ...orderRefWhere, userId },
+    const order = await findOrderForCaller(orderRefWhere, { userId: callerId, role }, {
       include: [{ model: OrderItem, as: 'items' }],
     });
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
 
-    if (!['pending', 'confirmed'].includes(order.status)) {
+    const isVendorCancel = role === 'vendor';
+    const shadowfaxUser = resolveShadowfaxCancelActor(role, shadowfaxCancel.user);
+    const cancelReason =
+      shadowfaxCancel.reason ??
+      (shadowfaxUser === 'Seller' ? 'Cancelled by seller' : 'Cancelled by customer');
+
+    if (isVendorCancel) {
+      if (!canManualTransition(order.status, 'cancelled')) {
+        throw AppError.badRequest(
+          `Cannot cancel order with status "${order.status}"`,
+          'ORDER_NOT_CANCELLABLE',
+        );
+      }
+    } else if (!['pending', 'confirmed'].includes(order.status)) {
       throw AppError.badRequest(
         `Cannot cancel order with status "${order.status}"`,
         'ORDER_NOT_CANCELLABLE',
@@ -682,9 +744,18 @@ class OrderService {
     }
 
     const wasPendingUnpaid = order.status === 'pending';
+    const oldStatus = order.status;
     const items = (order as unknown as { items: OrderItem[] }).items ?? [];
 
+    if (!wasPendingUnpaid && order.deliveryType === 'delivery') {
+      await cancelShadowfaxOrderForFinstyOrder(order.id, {
+        user: shadowfaxUser,
+        reason: cancelReason,
+      });
+    }
+
     const t = await sequelize.transaction();
+    let appliedVendorCancel = false;
     try {
       if (wasPendingUnpaid) {
         await failPendingPaymentsForOrder(order.id, t);
@@ -712,17 +783,52 @@ class OrderService {
       }
 
       await this._refundCapturedPaymentOnCancel(order.id, t);
-      await order.update({ status: 'cancelled' }, { transaction: t });
+
+      if (isVendorCancel) {
+        const result = await transitionOrderStatus({
+          orderId: order.id,
+          toStatus: 'cancelled',
+          source: 'vendor',
+          allowManual: true,
+          orderPatch: { cancelledAt: new Date() },
+          transaction: t,
+          skipPublish: true,
+        });
+        if (!result.applied && result.reason === 'invalid_transition') {
+          throw AppError.badRequest(
+            `Cannot cancel order with status "${order.status}"`,
+            'ORDER_NOT_CANCELLABLE',
+          );
+        }
+        appliedVendorCancel = result.applied;
+        if (result.applied) {
+          order.status = result.newStatus;
+        }
+      } else {
+        await order.update({ status: 'cancelled' }, { transaction: t });
+        order.status = 'cancelled';
+      }
+
       await t.commit();
     } catch (err) {
       await t.rollback();
       throw err;
     }
 
+    if (appliedVendorCancel) {
+      await publishOrderStatusChanged({
+        orderId: order.id,
+        userId: order.userId,
+        oldStatus,
+        newStatus: 'cancelled',
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     if (wasPendingUnpaid) {
-      notifyPaymentCancelled(userId, order.id);
+      notifyPaymentCancelled(order.userId, order.id);
     } else {
-      notifyBuyerOrderStatus(userId, order.id, 'cancelled');
+      notifyBuyerOrderStatus(order.userId, order.id, 'cancelled');
     }
 
     const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
@@ -880,6 +986,11 @@ class OrderService {
         throw err;
       }
     } else if (toStatus === 'cancelled') {
+      await cancelShadowfaxOrderForFinstyOrder(order.id, {
+        user: 'Seller',
+        reason: 'Cancelled by seller',
+      });
+
       const t = await sequelize.transaction();
       try {
         await this._refundCapturedPaymentOnCancel(order.id, t);
@@ -939,6 +1050,43 @@ class OrderService {
     return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
   }
 
+  // ─── Vendor: mark order dispatch-ready (Shadowfax) ───────────────────────────
+
+  async markVendorOrderDispatchReady(
+    orderId: string,
+    vendorId: string,
+    body: ShadowfaxDispatchReadyRequest,
+  ): Promise<{ success: true; data: unknown }> {
+    const store = await Store.findOne({ where: { ownerId: vendorId } });
+    if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
+
+    const storeOrderIds = sequelize.literal(
+      `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(store.id)})`,
+    );
+
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
+    const order = await Order.findOne({
+      where: {
+        [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
+      },
+      attributes: ['id', 'status', 'deliveryType'],
+    });
+
+    if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+
+    const dispatchReadyStatuses = ['confirmed', 'rider_assigned', 'at_store'] as const;
+    if (!dispatchReadyStatuses.includes(order.status as (typeof dispatchReadyStatuses)[number])) {
+      throw AppError.badRequest(
+        `Cannot mark order as dispatch-ready with status "${order.status}"`,
+        'ORDER_NOT_DISPATCH_READY',
+      );
+    }
+
+    const data = await markShadowfaxDispatchReadyForFinstyOrder(order.id, body);
+    return { success: true, data };
+  }
+
   // ─── Admin: update order status ───────────────────────────────────────────────
 
   async updateStatus(orderId: string, newStatus: string): Promise<ReturnType<typeof this.formatOrder>> {
@@ -990,6 +1138,11 @@ class OrderService {
         throw err;
       }
     } else if (toStatus === 'cancelled') {
+      await cancelShadowfaxOrderForFinstyOrder(order.id, {
+        user: 'Seller',
+        reason: 'Cancelled by seller',
+      });
+
       const t = await sequelize.transaction();
       try {
         await this._refundCapturedPaymentOnCancel(order.id, t);
@@ -1354,6 +1507,8 @@ class OrderService {
       shadowfaxOrderId:
         publicOrder.shadowfaxOrderId ??
         resolveShadowfaxOrderId(order.id, shadowfaxOrderIdByOrderId),
+      riderDetails: extractRiderDetailsFromOrder(order),
+      cancellation: extractCancellationFromOrder(order),
       payments,
       deliveryWaivedReason,
       deliveryConfig: getPublicDeliveryConfig(),

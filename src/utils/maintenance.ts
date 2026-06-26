@@ -117,27 +117,54 @@ export async function ensureOrderIdColumn(sequelize: any) {
 
     if (!ordersTableExists[0].exists) return;
 
-    await sequelize.query(`
-      ALTER TABLE orders
-      ADD COLUMN IF NOT EXISTS order_id VARCHAR(12);
+    const [columnState]: any = await sequelize.query(`
+      SELECT
+        c.is_nullable,
+        EXISTS (
+          SELECT 1
+          FROM pg_indexes
+          WHERE schemaname = 'public'
+            AND tablename = 'orders'
+            AND indexname = 'orders_order_id_unique_idx'
+        ) AS has_unique_index
+      FROM information_schema.columns c
+      WHERE c.table_schema = 'public'
+        AND c.table_name = 'orders'
+        AND c.column_name = 'order_id';
     `);
 
-    // Backfill old rows so NOT NULL + unique index can be safely applied.
-    await sequelize.query(`
-      UPDATE orders
-      SET order_id = 'FI' || UPPER(SUBSTRING(REPLACE(id::text, '-', '') FROM 1 FOR 10))
-      WHERE order_id IS NULL OR order_id = '';
-    `);
+    const column = columnState[0];
+    if (column && column.is_nullable === 'NO' && column.has_unique_index) {
+      return;
+    }
 
-    await sequelize.query(`
-      ALTER TABLE orders
-      ALTER COLUMN order_id SET NOT NULL;
-    `);
+    // Fail fast instead of blocking startup when another session holds a lock on orders.
+    await sequelize.query(`SET lock_timeout = '10s'`);
+    try {
+      await sequelize.query(`
+        ALTER TABLE orders
+        ADD COLUMN IF NOT EXISTS order_id VARCHAR(12);
+      `);
 
-    await sequelize.query(`
-      CREATE UNIQUE INDEX IF NOT EXISTS orders_order_id_unique_idx
-      ON orders (order_id);
-    `);
+      // Backfill old rows so NOT NULL + unique index can be safely applied.
+      await sequelize.query(`
+        UPDATE orders
+        SET order_id = 'FI' || UPPER(SUBSTRING(REPLACE(id::text, '-', '') FROM 1 FOR 10))
+        WHERE order_id IS NULL OR order_id = '';
+      `);
+
+      await sequelize.query(`
+        ALTER TABLE orders
+        ALTER COLUMN order_id SET NOT NULL;
+      `);
+
+      await sequelize.query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS orders_order_id_unique_idx
+        ON orders (order_id);
+      `);
+    } finally {
+      await sequelize.query(`SET lock_timeout = '0'`);
+    }
 
     logger.info('Ensured orders.order_id column and unique index');
   } catch (error) {

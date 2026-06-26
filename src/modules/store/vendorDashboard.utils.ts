@@ -4,7 +4,7 @@ export const VENDOR_SALES_ORDER_STATUSES = [
   'rider_assigned',
   'at_store',
   'picked_up',
-  'out_for_delivery',
+  'arrived',
   'delivered',
 ] as const;
 

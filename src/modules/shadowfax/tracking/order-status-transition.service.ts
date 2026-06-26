@@ -2,7 +2,7 @@ import type { Transaction } from 'sequelize';
 import sequelize from '@config/database';
 import Order, { type OrderStatus } from '@modules/order/order.model';
 import logger from '@utils/logger';
-import { canManualTransition, canTransition } from './order-status.fsm';
+import { canManualTransition, canShadowfaxTransition, canTransition } from './order-status.fsm';
 import { appendOrderStatusHistory } from './order-status-history.repository';
 import { publishOrderStatusChanged } from './order-status.publisher';
 import type { OrderStatusSource } from './shadowfax-webhook.types';
@@ -63,9 +63,12 @@ export async function transitionOrderStatus(
       };
     }
 
-    const allowed = input.allowManual
-      ? canManualTransition(oldStatus, toStatus)
-      : canTransition(oldStatus, toStatus);
+    const isShadowfaxSource = input.source.startsWith('shadowfax_');
+    const allowed = isShadowfaxSource
+      ? canShadowfaxTransition(oldStatus, toStatus)
+      : input.allowManual
+        ? canManualTransition(oldStatus, toStatus)
+        : canTransition(oldStatus, toStatus);
 
     if (!allowed) {
       logger.warn(
@@ -91,6 +94,7 @@ export async function transitionOrderStatus(
       source: input.source,
       remarks: input.remarks ?? null,
       payload: input.payload ?? null,
+      transaction: t,
     });
 
     return { applied: true, order, oldStatus, newStatus: toStatus };

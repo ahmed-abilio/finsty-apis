@@ -17,33 +17,24 @@ vi.mock('@modules/shadowfax/shadowfax-shipment.model', () => ({
   default: { findOne: vi.fn() },
 }));
 
-vi.mock('@modules/shadowfax/shadowfaxStatus.service', () => ({
-  default: { fetchOrderStatus: vi.fn() },
-}));
-
 vi.mock('./orderRef', () => ({
   buildOrderRefWhere: vi.fn(async (ref: string) => ({ id: ref })),
 }));
 
-vi.mock('@modules/shadowfax/tracking/shadowfax-dev-local-callback.service', () => ({
-  syncOrderFromShadowfaxStatusIfDevCallbackEnabled: vi.fn().mockResolvedValue({
-    attempted: false,
-    applied: false,
-  }),
+vi.mock('./orderShadowfaxSync.service', () => ({
+  fetchAndSyncShadowfaxDeliveryStatus: vi.fn(),
 }));
 
 import Order from './order.model';
 import Store from '@modules/store/store.model';
 import ShadowfaxShipment from '@modules/shadowfax/shadowfax-shipment.model';
-import shadowfaxStatusService from '@modules/shadowfax/shadowfaxStatus.service';
-import { syncOrderFromShadowfaxStatusIfDevCallbackEnabled } from '@modules/shadowfax/tracking/shadowfax-dev-local-callback.service';
+import { fetchAndSyncShadowfaxDeliveryStatus } from './orderShadowfaxSync.service';
 import { getOrderDeliveryStatus } from './orderDeliveryStatus.service';
 
 const orderFindOne = vi.mocked(Order.findOne);
 const storeFindOne = vi.mocked(Store.findOne);
 const shipmentFindOne = vi.mocked(ShadowfaxShipment.findOne);
-const fetchOrderStatus = vi.mocked(shadowfaxStatusService.fetchOrderStatus);
-const syncDevCallback = vi.mocked(syncOrderFromShadowfaxStatusIfDevCallbackEnabled);
+const fetchAndSync = vi.mocked(fetchAndSyncShadowfaxDeliveryStatus);
 
 const buyer = { userId: 'user-1', role: 'user' };
 const vendor = { userId: 'vendor-1', role: 'vendor' };
@@ -72,7 +63,7 @@ describe('getOrderDeliveryStatus', () => {
       shadowfaxOrderId: '21042908',
       trackUrl: null,
     } as ShadowfaxShipment);
-    fetchOrderStatus.mockResolvedValue({
+    fetchAndSync.mockResolvedValue({
       client_code: 'merchant001',
       status: 'DISPATCHED',
       sfx_order_id: 21042908,
@@ -87,7 +78,7 @@ describe('getOrderDeliveryStatus', () => {
 
     expect(storeFindOne).toHaveBeenCalledWith({ where: { ownerId: 'vendor-1' } });
     expect(result.status).toBe('DISPATCHED');
-    expect(fetchOrderStatus).toHaveBeenCalledWith('21042908');
+    expect(fetchAndSync).toHaveBeenCalledWith('order-1');
   });
 
   it('returns 400 for pickup orders', async () => {
@@ -114,20 +105,19 @@ describe('getOrderDeliveryStatus', () => {
       shadowfaxOrderId: '20611002',
       trackUrl: 'https://track.example/abc',
     } as ShadowfaxShipment);
-    fetchOrderStatus.mockResolvedValue({
+    fetchAndSync.mockResolvedValue({
       client_code: 'merchant001',
       status: 'ALLOTTED',
       sfx_order_id: 20611002,
       order_details: {} as never,
       drop_details: {} as never,
       order_items: [],
-      track_url: null,
+      track_url: 'https://track.example/abc',
       pickup_details: {} as never,
     });
 
     const result = await getOrderDeliveryStatus('order-1', buyer);
-    expect(fetchOrderStatus).toHaveBeenCalledWith('20611002');
-    expect(syncDevCallback).toHaveBeenCalledWith('order-1', expect.objectContaining({ status: 'ALLOTTED' }));
+    expect(fetchAndSync).toHaveBeenCalledWith('order-1');
     expect(result.status).toBe('ALLOTTED');
     expect(result.track_url).toBe('https://track.example/abc');
   });
@@ -139,7 +129,7 @@ describe('getOrderDeliveryStatus', () => {
       shadowfaxOrderId: '20611002',
       trackUrl: null,
     } as ShadowfaxShipment);
-    fetchOrderStatus.mockRejectedValue(AppError.internal('Shadowfax down', 'SHADOWFAX_UNAVAILABLE'));
+    fetchAndSync.mockRejectedValue(AppError.internal('Shadowfax down', 'SHADOWFAX_UNAVAILABLE'));
 
     await expect(getOrderDeliveryStatus('order-1', buyer)).rejects.toMatchObject({
       code: 'SHADOWFAX_UNAVAILABLE',

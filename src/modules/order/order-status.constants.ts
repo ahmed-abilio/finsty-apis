@@ -6,7 +6,7 @@ export const ORDER_STATUS_VALUES: OrderStatus[] = [
   'rider_assigned',
   'at_store',
   'picked_up',
-  'out_for_delivery',
+  'arrived',
   'delivered',
   'cancelled',
   'returned',
@@ -15,7 +15,7 @@ export const ORDER_STATUS_VALUES: OrderStatus[] = [
 /** Accept legacy vendor API status names during transition */
 const LEGACY_STATUS_MAP: Record<string, OrderStatus> = {
   processing: 'at_store',
-  shipped: 'out_for_delivery',
+  shipped: 'arrived',
 };
 
 export function normalizeOrderStatusInput(status: string): OrderStatus {
@@ -28,7 +28,7 @@ export const VENDOR_MANUAL_TARGET_STATUSES: OrderStatus[] = [
   'rider_assigned',
   'at_store',
   'picked_up',
-  'out_for_delivery',
+  'arrived',
   'delivered',
   'cancelled',
 ];
