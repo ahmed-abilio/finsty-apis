@@ -22,7 +22,7 @@ describe('resolveNotificationCategory', () => {
 
 describe('listCategoriesForRole', () => {
   it('returns vendor filter categories', () => {
-    expect(listCategoriesForRole(Roles.VENDOR)).toEqual(['orders', 'inventory', 'account']);
+    expect(listCategoriesForRole(Roles.VENDOR)).toEqual(['orders', 'inventory', 'promotions', 'account']);
   });
 
   it('validates vendor category filter', () => {

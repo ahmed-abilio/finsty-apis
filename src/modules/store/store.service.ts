@@ -27,6 +27,7 @@ import vendorRevenueService from './vendorRevenue.service';
 import { stockStatusWhere } from '@modules/product/productStock.util';
 import type { DateRange } from './vendorDashboard.utils';
 import { formatVendorProduct, type ProductWithVendorAssocs } from './vendorProductFormat';
+import { notifyVendorStoreReviewResult } from '@modules/notification/notification.store';
 
 // IFSC: 4 uppercase letters + '0' + 6 alphanumeric chars (RBI standard)
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -188,7 +189,9 @@ class StoreService {
       throw AppError.internal('Vendor approval failed', 'APPROVAL_FAILED');
     }
 
-    return store.reload();
+    const reloaded = await store.reload();
+    notifyVendorStoreReviewResult(reloaded, status, _remarks);
+    return reloaded;
   }
 
   // ─── Search ──────────────────────────────────────────────────────────────────

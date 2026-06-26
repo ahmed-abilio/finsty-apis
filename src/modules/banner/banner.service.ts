@@ -3,6 +3,11 @@ import { PriceBanner, StoreDiscountBanner } from './banner.model';
 import { AppError } from '@utils/appError';
 import Store from '@modules/store/store.model';
 import { getStoreIdsWithinRadius, GEOFENCE_RADIUS_KM } from '@utils/geo';
+import {
+  notifyAdminsNewBannerApplication,
+  notifyVendorBannerApproved,
+} from '@modules/notification/notification.banner';
+import logger from '@utils/logger';
 
 // ─── Input types ──────────────────────────────────────────────────────────────
 
@@ -131,6 +136,11 @@ class BannerService {
       isApproved: false,
       createdBy: vendorId,
     });
+
+    void notifyAdminsNewBannerApplication(banner).catch((err) => {
+      logger.error({ err, bannerId: banner.id }, 'Failed to notify admins of new banner application');
+    });
+
     return banner;
   }
 
@@ -183,6 +193,12 @@ class BannerService {
 
     banner.isApproved = true;
     await banner.save();
+
+    const store = await Store.findByPk(banner.storeId, { attributes: ['ownerId'] });
+    if (store?.ownerId) {
+      notifyVendorBannerApproved(store.ownerId, banner);
+    }
+
     return banner;
   }
 

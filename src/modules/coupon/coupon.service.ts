@@ -13,6 +13,8 @@ import CouponUsage from './coupon-usage.model';
 import { AppError } from '@utils/appError';
 import { Roles } from '@modules/user/user.model';
 import { computeMoneyDiscount, stackMoneyDiscounts } from './couponStackMath';
+import { notifyAdminsNewCouponApplication, notifyVendorCouponApproved } from '@modules/notification/notification.coupon';
+import logger from '@utils/logger';
 
 export interface CreateCouponInput {
   code: string;
@@ -118,7 +120,7 @@ class CouponService {
 
     const isApproved = creatorRole === Roles.ADMIN;
 
-    return Coupon.create({
+    const coupon = await Coupon.create({
       code: input.code.toUpperCase(),
       type: input.type,
       value: input.value ?? 0,
@@ -141,6 +143,14 @@ class CouponService {
       categoryIds: appliesTo === 'specific_categories' ? (input.categoryIds ?? null) : null,
       customerIds: customerEligibility === 'specific_customers' ? (input.customerIds ?? null) : null,
     });
+
+    if (creatorRole === Roles.VENDOR && !isApproved) {
+      void notifyAdminsNewCouponApplication(coupon).catch((err) => {
+        logger.error({ err, couponId: coupon.id }, 'Failed to notify admins of new coupon application');
+      });
+    }
+
+    return coupon;
   }
 
   // ─── Admin approve ────────────────────────────────────────────────────────────
@@ -152,6 +162,11 @@ class CouponService {
 
     coupon.isApproved = true;
     await coupon.save();
+
+    if (coupon.createdBy) {
+      notifyVendorCouponApproved(coupon.createdBy, coupon);
+    }
+
     return coupon;
   }
 

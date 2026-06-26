@@ -54,4 +54,29 @@ describe('buildNotificationPayload', () => {
     expect(payload.body).toContain('SAVE10');
     expect(payload.body).toContain('50.00');
   });
+
+  it('builds admin store application copy', () => {
+    const payload = buildNotificationPayload(NotificationType.ADMIN_STORE_APPLICATION, {
+      storeId: 'store-1',
+      storeName: 'Zara',
+    });
+    expect(payload.title).toBe('New store application');
+    expect(payload.body).toContain('Zara');
+    expect(payload.data.storeId).toBe('store-1');
+  });
+
+  it('builds vendor store approved copy', () => {
+    const payload = buildNotificationPayload(NotificationType.VENDOR_STORE_APPROVED, {
+      storeName: 'Zara',
+    });
+    expect(payload.title).toBe('Store approved');
+    expect(payload.body).toContain('Zara');
+  });
+
+  it('builds admin coupon application copy', () => {
+    const payload = buildNotificationPayload(NotificationType.ADMIN_COUPON_APPLICATION, {
+      couponCode: 'SAVE10',
+    });
+    expect(payload.body).toContain('SAVE10');
+  });
 });

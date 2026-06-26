@@ -64,6 +64,7 @@ import {
   notifyBuyerOrderStatus,
   notifyOrderPlacedAfterPayment,
   notifyPaymentCancelled,
+  notifyVendorsOrderCancelled,
 } from '@modules/notification/notification.order';
 import { failPendingPaymentsForOrder } from '@modules/payment/payment.service';
 
@@ -829,6 +830,10 @@ class OrderService {
       notifyPaymentCancelled(order.userId, order.id);
     } else {
       notifyBuyerOrderStatus(order.userId, order.id, 'cancelled');
+      const productIds = items.map((item) => item.productId);
+      void notifyVendorsOrderCancelled(order.id, productIds).catch((err) => {
+        logger.error({ err, orderId: order.id }, 'Failed to enqueue vendor order-cancelled notifications');
+      });
     }
 
     const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);

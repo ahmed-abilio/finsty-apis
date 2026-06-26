@@ -62,6 +62,31 @@ export async function notifyVendorsNewOrder(orderId: string, productIds: string[
   }
 }
 
+export async function notifyVendorsOrderCancelled(orderId: string, productIds: string[]): Promise<void> {
+  const uniqueIds = [...new Set(productIds.filter(Boolean))];
+  if (!uniqueIds.length) return;
+
+  const products = await Product.findAll({
+    where: { id: uniqueIds },
+    attributes: ['id'],
+    include: [{ model: Store, as: 'store', attributes: ['ownerId'] }],
+  });
+
+  const orderNumber = formatOrderNumber(orderId);
+  const ownerIds = new Set<string>();
+
+  for (const row of products) {
+    const store = (row as Product & { store?: Store }).store;
+    if (store?.ownerId) ownerIds.add(store.ownerId);
+  }
+
+  for (const vendorUserId of ownerIds) {
+    notifyVendor(vendorUserId, NotificationType.VENDOR_ORDER_CANCELLED, { orderId, orderNumber }, {
+      jobId: `vendor-order-cancelled-${orderId}-${vendorUserId}`,
+    });
+  }
+}
+
 export function scheduleRateOrderReminder(userId: string, orderId: string): void {
   const delayMs = Number(process.env.NOTIFICATION_RATE_ORDER_DELAY_MS ?? 86400000);
   notifyUser(

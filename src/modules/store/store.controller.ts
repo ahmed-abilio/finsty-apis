@@ -3,6 +3,9 @@ import storeService, { StoreSearchQuery, ProductSearchQuery, VendorApplicationDa
 import type { StoreGender, StoreAttributes } from './store.model';
 import { AppError } from '@utils/appError';
 import { parseRevenueDateRange } from './vendorDashboard.utils';
+import { Roles } from '@modules/user/user.model';
+import { notifyAdminsNewStoreApplication } from '@modules/notification/notification.store';
+import logger from '@utils/logger';
 
 interface StoreParams {
   storeId: string;
@@ -66,6 +69,14 @@ class StoreController {
     }
 
     const store = await storeService.create({ ...request.body, ownerId });
+    const creatorRole = (request as { user?: { role?: string } }).user?.role;
+
+    if (creatorRole !== Roles.ADMIN) {
+      void notifyAdminsNewStoreApplication(store).catch((err) => {
+        logger.error({ err, storeId: store.id }, 'Failed to notify admins of new store application');
+      });
+    }
+
     void reply.status(201).send({ success: true, data: { store: store.toPublicJSON() } });
   }
 

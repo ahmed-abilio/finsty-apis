@@ -113,6 +113,54 @@ export function buildNotificationPayload(
       title = 'Out of stock';
       body = `${str(context.productName, 'A product')} is now out of stock.`;
       break;
+    case NotificationType.ADMIN_STORE_APPLICATION:
+      title = 'New store application';
+      body = context.storeName
+        ? `${str(context.storeName)} submitted a store application for review.`
+        : 'A new store application is waiting for review.';
+      break;
+    case NotificationType.ADMIN_COUPON_APPLICATION:
+      title = 'New coupon for review';
+      body = context.couponCode
+        ? `Coupon ${str(context.couponCode)} is waiting for approval.`
+        : 'A vendor coupon is waiting for approval.';
+      break;
+    case NotificationType.ADMIN_BANNER_APPLICATION:
+      title = 'New banner for review';
+      body = context.bannerTitle
+        ? `Banner "${str(context.bannerTitle)}" is waiting for approval.`
+        : 'A store discount banner is waiting for approval.';
+      break;
+    case NotificationType.VENDOR_STORE_APPROVED:
+      title = 'Store approved';
+      body = context.storeName
+        ? `${str(context.storeName)} is now approved and active on Finsty.`
+        : 'Your store application was approved.';
+      break;
+    case NotificationType.VENDOR_STORE_REJECTED:
+      title = 'Store application rejected';
+      body = context.storeName
+        ? `${str(context.storeName)} application was not approved.`
+        : 'Your store application was not approved.';
+      break;
+    case NotificationType.VENDOR_COUPON_APPROVED:
+      title = 'Coupon approved';
+      body = context.couponCode
+        ? `Coupon ${str(context.couponCode)} is now live.`
+        : 'Your coupon was approved.';
+      break;
+    case NotificationType.VENDOR_BANNER_APPROVED:
+      title = 'Banner approved';
+      body = context.bannerTitle
+        ? `Banner "${str(context.bannerTitle)}" is now live.`
+        : 'Your store discount banner was approved.';
+      break;
+    case NotificationType.VENDOR_ORDER_CANCELLED:
+      title = 'Order cancelled';
+      body = orderNumber
+        ? `Order #${orderNumber} was cancelled.`
+        : 'An order for your store was cancelled.';
+      break;
     default: {
       const _exhaustive: never = type;
       void _exhaustive;
