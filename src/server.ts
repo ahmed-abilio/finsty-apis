@@ -63,6 +63,7 @@ async function start() {
     logger.info(`Server started in ${duration}ms on http://${HOST}:${PORT}`);
     logger.info(`Swagger docs at http://${HOST}:${PORT}/docs`);
     logger.info(`Bull Board at http://${HOST}:${PORT}/admin/queues`);
+    logger.info(`Version 1.0.0`);
   } catch (err) {
     logger.error({ err }, 'Failed to start server');
     process.exit(1);
