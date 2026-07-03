@@ -10,6 +10,7 @@ import {
   fixBrandConstraints,
   ensureOrderIdColumn,
   ensureVariantSizeChartColumn,
+  ensureSubCategoryCanReturnColumn,
 } from '@utils/maintenance';
 import { scheduleOrderExpiryJob } from '@queues/orderExpiryQueue';
 import { scheduleShadowfaxReconciliationJob } from '@queues/shadowfaxReconciliationQueue';
@@ -31,6 +32,7 @@ async function start() {
     await fixMissingSlugs(sequelize);
     await ensureOrderIdColumn(sequelize);
     await ensureVariantSizeChartColumn(sequelize);
+    await ensureSubCategoryCanReturnColumn(sequelize);
     await scheduleOrderExpiryJob();
     await scheduleShadowfaxReconciliationJob();
 

@@ -151,6 +151,64 @@ export function buildPlaceOrderPayload(params: {
   };
 }
 
+export function buildReturnPlaceOrderPayload(params: {
+  orderReturnId: string;
+  order: Order;
+  store: Store;
+  address: Address;
+  items: Array<{ productId: string; productName: string; unitPrice: number; quantity: number }>;
+  replay?: ShadowfaxReplaySnapshot;
+}): ShadowfaxPlaceOrderRequest {
+  const { orderReturnId, order, store, address, items } = params;
+  const replay = params.replay ?? getShadowfaxReplayFromOrder(order);
+  const pickupPhone = normalizeShadowfaxContactNumber(address.receiverPhone);
+  const dropPhone = resolvePickupPhone(store);
+
+  if (!dropPhone) {
+    throw new Error('PICKUP_PHONE_REQUIRED');
+  }
+
+  const isPrepaid = replay.paid === 'true';
+  const orderValue = resolveShadowfaxPlaceOrderValue(items);
+  const storeAddress = formatAddressLine(store.address, store.addressLine2 ?? null);
+  const customerAddress = formatAddressLine(address.line1, address.line2);
+
+  return {
+    client_code: getShadowfaxClientCode(),
+    order_details: {
+      client_order_id: orderReturnId,
+      order_value: orderValue,
+      paid: isPrepaid,
+      rain_flag: replay.rainFlag ?? false,
+      scheduled_time: formatShadowfaxScheduledTime(),
+      pickup_otp: randomFourDigitOtp(),
+      return_otp: randomFourDigitOtp(),
+    },
+    pickup_details: {
+      name: address.receiverName,
+      contact_number: pickupPhone,
+      address: customerAddress,
+      latitude: Number(address.latitude),
+      longitude: Number(address.longitude),
+      city: address.city,
+    },
+    drop_details: {
+      name: store.name,
+      contact_number: normalizeShadowfaxContactNumber(dropPhone),
+      address: storeAddress,
+      latitude: Number(store.latitude),
+      longitude: Number(store.longitude),
+      city: store.city,
+    },
+    order_items: items.map((item, index) => ({
+      id: shadowfaxOrderItemId(item.productId, index),
+      name: item.productName,
+      price: Number(item.unitPrice),
+      quantity: item.quantity,
+    })),
+  };
+}
+
 export function parsePlaceOrderResponse(payload: unknown): ParsedPlaceOrderResponse {
   const inner = unwrapPayload(payload);
   if (!inner || typeof inner !== 'object') {

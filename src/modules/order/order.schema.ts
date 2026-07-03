@@ -368,6 +368,16 @@ export const orderObject = {
       description:
         'Shadowfax logistics order id after a delivery shipment is placed. `null` for pickup orders or before Shadowfax placement completes.',
     },
+    returnId: {
+      type: ['string', 'null'],
+      format: 'uuid',
+      description: 'Finsty return record id when an in-progress return exists; otherwise null.',
+    },
+    returnShadowfaxOrderId: {
+      type: ['string', 'null'],
+      description:
+        'Shadowfax reverse-pickup order id for the active return; null if none or not yet placed.',
+    },
     shadowfaxTrackingUrl: { type: 'string', nullable: true },
     deliveryPartner: { type: 'string' },
     deliveredAt: { type: 'string', nullable: true, format: 'date-time' },
@@ -405,6 +415,11 @@ export const orderObject = {
       },
     },
     deliveryMetadata: { type: 'object', nullable: true, additionalProperties: true },
+    isDispatchReady: {
+      type: 'boolean',
+      description:
+        'True after the vendor (or system) successfully marked the order dispatch-ready with Shadowfax.',
+    },
     payments: { type: 'array', items: paymentObject },
     deliveryWaivedReason: {
       type: 'string',
@@ -417,6 +432,19 @@ export const orderObject = {
       additionalProperties: true,
       properties: {
         freeDeliveryRequiresCoupon: { type: 'boolean' },
+      },
+    },
+    statusHistory: {
+      type: 'array',
+      description:
+        'Chronological status timeline. Populated with real transition timestamps on vendor endpoints; other endpoints return only the initial `pending` entry.',
+      items: {
+        type: 'object',
+        properties: {
+          status: { type: 'string' },
+          occurredAt: { type: 'string', format: 'date-time' },
+          source: { type: 'string' },
+        },
       },
     },
     createdAt: { type: 'string', nullable: true },
@@ -652,7 +680,7 @@ export const getOrderSchema: FastifySchema = {
   tags: ['Orders'],
   summary: 'Get order detail',
   description:
-    'Returns the full order including items, delivery address, store details, nested `variant.color`, `myReview` (with review images) / `userRating` when the user has reviewed that product, `walletAmountPaid` for wallet used at checkout, and `shadowfaxOrderId` when a delivery shipment exists.',
+    'Returns the full order including items, delivery address, store details, nested `variant.color`, `myReview` (with review images) / `userRating` when the user has reviewed that product, `walletAmountPaid` for wallet used at checkout, `shadowfaxOrderId` when a delivery shipment exists, and `returnId` / `returnShadowfaxOrderId` when an in-progress return exists.',
   security: [{ BearerAuth: [] }],
   params: {
     type: 'object',
@@ -753,7 +781,8 @@ export const listVendorOrdersSchema: FastifySchema = {
   description:
     '**Path:** `GET /api/v1/orders/vendor` — vendor/admin only.\n\n' +
     'Returns paginated orders that contain at least one line item from the authenticated vendor\'s store. ' +
-    'Response items use the same `orderObject` shape as buyer order lists (items, address, payments, `walletAmountPaid`, `shadowfaxOrderId`).\n\n' +
+    'Response items use the same `orderObject` shape as buyer order lists (items, address, payments, `walletAmountPaid`, `shadowfaxOrderId`, `isDispatchReady`). ' +
+    '`statusHistory` includes the full per-status transition timeline with real timestamps (`status`, `occurredAt`, `source`).\n\n' +
     '**Filters:**\n' +
     '- `status` — exact match on order status. When omitted, `pending` (unpaid) orders are excluded.\n' +
     '- `from` / `to` — optional ISO 8601 range on `order.createdAt` (both inclusive). ' +
@@ -849,7 +878,7 @@ export const vendorGetOrderSchema: FastifySchema = {
   description:
     'Returns full order details when the order contains at least one line item from the authenticated vendor\'s store. ' +
     'Shadowfax status, rider details, and cancellation metadata are synced on read (same as buyer `GET /orders/:orderId`). ' +
-    'Includes the same fields as `GET /orders/vendor` list items (items, address, payments, `walletAmountPaid`, `shadowfaxOrderId`) ' +
+    'Includes the same fields as `GET /orders/vendor` list items (items, address, payments, `walletAmountPaid`, `shadowfaxOrderId`, `isDispatchReady`, `statusHistory`) ' +
     'plus a `customer` object (`id`, `name`, `phone`, `email`, `profileImage`) for the buyer. ' +
     'Returns 404 if the order does not exist or is not accessible to this vendor.',
   security: [{ BearerAuth: [] }],
@@ -1014,6 +1043,94 @@ export const adminUpdateStatusSchema: FastifySchema = {
       },
     },
     400: validationErrorResponse,
+    401: unauthorized,
+    403: notFound,
+    404: notFound,
+  },
+};
+
+const adminOrderWithCustomer = {
+  type: 'object',
+  properties: {
+    ...orderObject.properties,
+    customer: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        id: { type: 'string' },
+        name: { type: 'string', nullable: true },
+        phone: { type: 'string', nullable: true },
+        email: { type: 'string', nullable: true },
+        profileImage: { type: 'string', nullable: true },
+      },
+    },
+  },
+} as const;
+
+export const adminListOrdersSchema: FastifySchema = {
+  tags: ['Orders'],
+  summary: 'List all orders (admin only)',
+  security: [{ BearerAuth: [] }],
+  querystring: {
+    type: 'object',
+    properties: {
+      page: { type: 'number', minimum: 1, default: 1 },
+      limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
+      status: { type: 'string', enum: ORDER_STATUS_VALUES },
+      userId: { type: 'string', format: 'uuid' },
+      storeId: { type: 'string', format: 'uuid' },
+      search: { type: 'string' },
+      email: { type: 'string' },
+      from: { type: 'string', format: 'date-time' },
+      to: { type: 'string', format: 'date-time' },
+      deliveryType: { type: 'string', enum: ['delivery', 'pickup'] },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            orders: { type: 'array', items: adminOrderWithCustomer },
+            pagination: {
+              type: 'object',
+              properties: {
+                total: { type: 'number' },
+                page: { type: 'number' },
+                limit: { type: 'number' },
+                totalPages: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: unauthorized,
+    403: notFound,
+  },
+};
+
+export const adminGetOrderSchema: FastifySchema = {
+  tags: ['Orders'],
+  summary: 'Get any order by reference (admin only)',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['orderId'],
+    properties: { orderId: orderRefParam },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', properties: { order: adminOrderWithCustomer } },
+      },
+    },
     401: unauthorized,
     403: notFound,
     404: notFound,

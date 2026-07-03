@@ -6,6 +6,7 @@ import Address from '@modules/address/address.model';
 import Wallet from '@modules/wallet/wallet.model';
 import WalletTransaction from '@modules/wallet/wallet-transaction.model';
 import User from '@modules/user/user.model';
+import userService from '@modules/user/user.service';
 import couponService from '@modules/coupon/coupon.service';
 import CartItem from '@modules/cart/cart-item.model';
 import PendingOrder from './pending-order.model';
@@ -36,8 +37,8 @@ import { buildShadowfaxReplayFromSubtotal } from '@modules/shadowfax/shadowfaxDe
 import { scheduleShadowfaxPlacementIfDelivery } from '@modules/shadowfax/shadowfaxPlacement.service';
 import { cancelShadowfaxOrderForFinstyOrder } from '@modules/shadowfax/shadowfaxCancel.service';
 import type { ShadowfaxCancelUser } from '@modules/shadowfax/shadowfaxCancel.types';
-import { markShadowfaxDispatchReadyForFinstyOrder } from '@modules/shadowfax/shadowfaxDispatchReady.service';
 import type { ShadowfaxDispatchReadyRequest } from '@modules/shadowfax/shadowfaxDispatchReady.types';
+import { applyOrderDispatchReady } from './orderDispatchReady.service';
 import { getOrderDeliveryStatus } from './orderDeliveryStatus.service';
 import {
   extractCancellationFromOrder,
@@ -46,6 +47,12 @@ import {
 import { maybeSyncOrderShadowfaxStatusForOrderDetail } from './orderShadowfaxSync.service';
 import { buildWalletPaidByOrderIds, resolveWalletAmountPaid } from './orderWalletPaid';
 import { buildShadowfaxOrderIdByOrderIds, resolveShadowfaxOrderId } from './orderShadowfax';
+import { buildOrderStatusHistoryByOrderIds, type OrderStatusEvent } from './orderStatusHistoryLookup';
+import {
+  buildActiveReturnByOrderIds,
+  resolveActiveReturn,
+  type ActiveReturnSummary,
+} from './orderReturnLookup';
 import { buildOrderRefWhere, throwIfOrderRefLooksLikeUserId } from './orderRef';
 import { findOrderForCaller, resolveShadowfaxCancelActor } from './orderCallerAccess';
 import { normalizeOrderStatusInput } from './order-status.constants';
@@ -377,14 +384,15 @@ class OrderService {
     );
     const userReviewsMap = await this.buildUserReviewsMap(userId, [...new Set(allProductIds)]);
     const orderIds = rows.map((o) => o.id);
-    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
       buildWalletPaidByOrderIds(orderIds),
       buildShadowfaxOrderIdByOrderIds(orderIds),
+      buildActiveReturnByOrderIds(orderIds),
     ]);
 
     return {
       orders: rows.map((o) =>
-        this.formatOrder(o, userReviewsMap, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+        this.formatOrder(o, userReviewsMap, walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId),
       ),
       total: count,
       page,
@@ -459,14 +467,24 @@ class OrderService {
     });
 
     const orderIds = rows.map((o) => o.id);
-    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
-      buildWalletPaidByOrderIds(orderIds),
-      buildShadowfaxOrderIdByOrderIds(orderIds),
-    ]);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId, statusHistoryByOrderId] =
+      await Promise.all([
+        buildWalletPaidByOrderIds(orderIds),
+        buildShadowfaxOrderIdByOrderIds(orderIds),
+        buildActiveReturnByOrderIds(orderIds),
+        buildOrderStatusHistoryByOrderIds(orderIds),
+      ]);
 
     return {
       orders: rows.map((o) =>
-        this.formatOrder(o, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+        this.formatOrder(
+          o,
+          undefined,
+          walletPaidByOrderId,
+          shadowfaxOrderIdByOrderId,
+          activeReturnByOrderId,
+          statusHistoryByOrderId,
+        ),
       ),
       total: count,
       page,
@@ -546,15 +564,20 @@ class OrderService {
 
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
 
-    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
-      buildWalletPaidByOrderIds([order.id]),
-      buildShadowfaxOrderIdByOrderIds([order.id]),
-    ]);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId, statusHistoryByOrderId] =
+      await Promise.all([
+        buildWalletPaidByOrderIds([order.id]),
+        buildShadowfaxOrderIdByOrderIds([order.id]),
+        buildActiveReturnByOrderIds([order.id]),
+        buildOrderStatusHistoryByOrderIds([order.id]),
+      ]);
     const formatted = this.formatOrder(
       order,
       undefined,
       walletPaidByOrderId,
       shadowfaxOrderIdByOrderId,
+      activeReturnByOrderId,
+      statusHistoryByOrderId,
     );
     const user = (order as unknown as { user?: User }).user;
 
@@ -622,14 +645,15 @@ class OrderService {
     });
 
     const orderIds = rows.map((o) => o.id);
-    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
       buildWalletPaidByOrderIds(orderIds),
       buildShadowfaxOrderIdByOrderIds(orderIds),
+      buildActiveReturnByOrderIds(orderIds),
     ]);
 
     return {
       orders: rows.map((o) =>
-        this.formatOrder(o, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+        this.formatOrder(o, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId),
       ),
       total: count,
       page,
@@ -693,12 +717,13 @@ class OrderService {
 
     const productIds = ((order as unknown as { items: OrderItem[] }).items ?? []).map((i) => i.productId);
     const userReviewsMap = await this.buildUserReviewsMap(userId, productIds);
-    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
       buildWalletPaidByOrderIds([order.id]),
       buildShadowfaxOrderIdByOrderIds([order.id]),
+      buildActiveReturnByOrderIds([order.id]),
     ]);
 
-    return this.formatOrder(order, userReviewsMap, walletPaidByOrderId, shadowfaxOrderIdByOrderId);
+    return this.formatOrder(order, userReviewsMap, walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId);
   }
 
   async getDeliveryStatus(
@@ -756,7 +781,7 @@ class OrderService {
     }
 
     const t = await sequelize.transaction();
-    let appliedVendorCancel = false;
+    let appliedCancel = false;
     try {
       if (wasPendingUnpaid) {
         await failPendingPaymentsForOrder(order.id, t);
@@ -785,30 +810,25 @@ class OrderService {
 
       await this._refundCapturedPaymentOnCancel(order.id, t);
 
-      if (isVendorCancel) {
-        const result = await transitionOrderStatus({
-          orderId: order.id,
-          toStatus: 'cancelled',
-          source: 'vendor',
-          allowManual: true,
-          orderPatch: { cancelledAt: new Date() },
-          transaction: t,
-          skipPublish: true,
-        });
-        if (!result.applied && result.reason === 'invalid_transition') {
-          throw AppError.badRequest(
-            `Cannot cancel order with status "${order.status}"`,
-            'ORDER_NOT_CANCELLABLE',
-          );
-        }
-        appliedVendorCancel = result.applied;
-        if (result.applied) {
-          order.status = result.newStatus;
-        }
-      } else {
-        await order.update({ status: 'cancelled' }, { transaction: t });
-        order.status = 'cancelled';
+      const result = await transitionOrderStatus({
+        orderId: order.id,
+        toStatus: 'cancelled',
+        source: isVendorCancel ? 'vendor' : 'user',
+        allowManual: isVendorCancel,
+        orderPatch: { cancelledAt: new Date() },
+        transaction: t,
+        skipPublish: true,
+      });
+      if (!result.applied && result.reason === 'invalid_transition') {
+        throw AppError.badRequest(
+          `Cannot cancel order with status "${order.status}"`,
+          'ORDER_NOT_CANCELLABLE',
+        );
       }
+      if (result.applied) {
+        order.status = result.newStatus;
+      }
+      appliedCancel = result.applied;
 
       await t.commit();
     } catch (err) {
@@ -816,7 +836,7 @@ class OrderService {
       throw err;
     }
 
-    if (appliedVendorCancel) {
+    if (appliedCancel) {
       await publishOrderStatusChanged({
         orderId: order.id,
         userId: order.userId,
@@ -836,9 +856,12 @@ class OrderService {
       });
     }
 
-    const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
+    const [shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
+      buildShadowfaxOrderIdByOrderIds([order.id]),
+      buildActiveReturnByOrderIds([order.id]),
+    ]);
 
-    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
+    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId, activeReturnByOrderId);
   }
 
   // ─── Wallet payment ───────────────────────────────────────────────────────────
@@ -899,7 +922,14 @@ class OrderService {
         { transaction: t },
       );
 
-      await order.update({ status: 'confirmed' }, { transaction: t });
+      await transitionOrderStatus({
+        orderId: order.id,
+        toStatus: 'confirmed',
+        source: 'payment',
+        transaction: t,
+        skipPublish: true,
+      });
+      order.status = 'confirmed';
 
       await t.commit();
 
@@ -909,13 +939,14 @@ class OrderService {
       void notifyOrderPlacedAfterPayment(userId, order.id);
       notifyBuyerOrderStatus(userId, order.id, 'confirmed');
 
-      const [walletPaidByOrderId, shadowfaxOrderIdByOrderId] = await Promise.all([
+      const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
         buildWalletPaidByOrderIds([order.id]),
         buildShadowfaxOrderIdByOrderIds([order.id]),
+        buildActiveReturnByOrderIds([order.id]),
       ]);
 
       return {
-        order: this.formatOrder(order, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId),
+        order: this.formatOrder(order, undefined, walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId),
         walletBalance: balanceAfter,
       };
     } catch (err) {
@@ -1050,9 +1081,12 @@ class OrderService {
       ],
     });
 
-    const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
+    const [shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
+      buildShadowfaxOrderIdByOrderIds([order.id]),
+      buildActiveReturnByOrderIds([order.id]),
+    ]);
 
-    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
+    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId, activeReturnByOrderId);
   }
 
   // ─── Vendor: mark order dispatch-ready (Shadowfax) ───────────────────────────
@@ -1088,7 +1122,7 @@ class OrderService {
       );
     }
 
-    const data = await markShadowfaxDispatchReadyForFinstyOrder(order.id, body);
+    const data = await applyOrderDispatchReady(order.id, body);
     return { success: true, data };
   }
 
@@ -1202,9 +1236,246 @@ class OrderService {
       ],
     });
 
-    const shadowfaxOrderIdByOrderId = await buildShadowfaxOrderIdByOrderIds([order.id]);
+    const [shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
+      buildShadowfaxOrderIdByOrderIds([order.id]),
+      buildActiveReturnByOrderIds([order.id]),
+    ]);
 
-    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId);
+    return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId, activeReturnByOrderId);
+  }
+
+  async listForAdmin(
+    filters: {
+      page?: number;
+      limit?: number;
+      status?: OrderStatus;
+      userId?: string;
+      storeId?: string;
+      search?: string;
+      email?: string;
+      from?: string;
+      to?: string;
+      deliveryType?: import('./order.model').DeliveryType;
+    } = {},
+  ) {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
+    const offset = (page - 1) * limit;
+
+    const andConditions: Record<string, unknown>[] = [];
+
+    if (filters.email?.trim()) {
+      const userIds = await userService.findIdsByEmail(filters.email);
+      if (userIds.length === 0) {
+        return {
+          orders: [],
+          pagination: { total: 0, page, limit, totalPages: 1 },
+        };
+      }
+      andConditions.push({ userId: { [Op.in]: userIds } });
+    }
+
+    if (filters.status) {
+      andConditions.push({ status: filters.status });
+    }
+    if (filters.userId) {
+      andConditions.push({ userId: filters.userId });
+    }
+    if (filters.deliveryType) {
+      andConditions.push({ deliveryType: filters.deliveryType });
+    }
+    if (filters.from || filters.to) {
+      if (!filters.from || !filters.to) {
+        throw AppError.badRequest(
+          'Both from and to are required when filtering by date',
+          'INVALID_DATE_RANGE',
+        );
+      }
+      andConditions.push({
+        createdAt: {
+          [Op.gte]: new Date(filters.from),
+          [Op.lte]: new Date(filters.to),
+        },
+      });
+    }
+    if (filters.storeId) {
+      andConditions.push({
+        id: {
+          [Op.in]: sequelize.literal(
+            `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(filters.storeId)})`,
+          ),
+        },
+      });
+    }
+    if (filters.search?.trim()) {
+      const term = filters.search.trim();
+      const uuidRe =
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const publicOrderRe = /^FI[A-Z0-9]{6}\d{3}[A-Z0-9]$/;
+      if (uuidRe.test(term)) {
+        andConditions.push({ id: term });
+      } else if (publicOrderRe.test(term)) {
+        andConditions.push({ orderId: term });
+      } else {
+        andConditions.push({ orderId: { [Op.iLike]: `%${term}%` } });
+      }
+    }
+
+    const where =
+      andConditions.length > 0 ? { [Op.and]: andConditions } : {};
+
+    const { count, rows } = await Order.findAndCountAll({
+      where,
+      include: [
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Product,
+              as: 'product',
+              attributes: ['id', 'storeId'],
+              include: [
+                { model: Store, as: 'store' },
+                { model: ProductImage, as: 'images' },
+              ],
+            },
+            {
+              model: ProductVariant,
+              as: 'variant',
+              include: [
+                {
+                  model: ProductColor,
+                  as: 'color',
+                  include: [{ model: ProductColorImage, as: 'images' }],
+                },
+              ],
+            },
+          ],
+        },
+        { model: Address, as: 'address' },
+        { model: Payment, as: 'payments' },
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'phone', 'email', 'profileImage'],
+        },
+      ],
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
+      distinct: true,
+    });
+
+    const orderIds = rows.map((o) => o.id);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds(orderIds),
+      buildShadowfaxOrderIdByOrderIds(orderIds),
+      buildActiveReturnByOrderIds(orderIds),
+    ]);
+
+    const orders = rows.map((o) => {
+      const formatted = this.formatOrder(
+        o,
+        undefined,
+        walletPaidByOrderId,
+        shadowfaxOrderIdByOrderId,
+        activeReturnByOrderId,
+      );
+      const user = (o as unknown as { user?: User }).user;
+      return {
+        ...formatted,
+        customer: user ? this.formatOrderCustomer(user) : null,
+      };
+    });
+
+    return {
+      orders,
+      pagination: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit) || 1,
+      },
+    };
+  }
+
+  async getByIdForAdmin(orderRef: string) {
+    const orderRefWhere = await buildOrderRefWhere(orderRef);
+    const orderStub = await Order.findOne({
+      where: orderRefWhere,
+      attributes: ['id', 'deliveryType', 'status'],
+    });
+    if (!orderStub) {
+      await throwIfOrderRefLooksLikeUserId(orderRef);
+      throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+    }
+
+    await maybeSyncOrderShadowfaxStatusForOrderDetail(
+      orderStub.id,
+      orderStub.deliveryType,
+      orderStub.status,
+    );
+
+    const order = await Order.findOne({
+      where: orderRefWhere,
+      include: [
+        {
+          model: OrderItem,
+          as: 'items',
+          include: [
+            {
+              model: Product,
+              as: 'product',
+              attributes: ['id', 'storeId'],
+              include: [
+                { model: Store, as: 'store' },
+                { model: ProductImage, as: 'images' },
+              ],
+            },
+            {
+              model: ProductVariant,
+              as: 'variant',
+              include: [
+                {
+                  model: ProductColor,
+                  as: 'color',
+                  include: [{ model: ProductColorImage, as: 'images' }],
+                },
+              ],
+            },
+          ],
+        },
+        { model: Address, as: 'address' },
+        { model: Payment, as: 'payments' },
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'name', 'phone', 'email', 'profileImage'],
+        },
+      ],
+    });
+
+    if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
+      buildWalletPaidByOrderIds([order.id]),
+      buildShadowfaxOrderIdByOrderIds([order.id]),
+      buildActiveReturnByOrderIds([order.id]),
+    ]);
+    const formatted = this.formatOrder(
+      order,
+      undefined,
+      walletPaidByOrderId,
+      shadowfaxOrderIdByOrderId,
+      activeReturnByOrderId,
+    );
+    const user = (order as unknown as { user?: User }).user;
+
+    return {
+      ...formatted,
+      customer: user ? this.formatOrderCustomer(user) : null,
+    };
   }
 
   // ─── Cancellation refund (private) ────────────────────────────────────────────
@@ -1457,6 +1728,8 @@ class OrderService {
     userReviewsMap?: Map<string, OrderLineItemMyReview | null>,
     walletPaidByOrderId?: Map<string, number>,
     shadowfaxOrderIdByOrderId?: Map<string, string | null>,
+    activeReturnByOrderId?: Map<string, ActiveReturnSummary | null>,
+    statusHistoryByOrderId?: Map<string, OrderStatusEvent[]>,
   ) {
     const items = ((order as unknown as { items: OrderItem[] }).items ?? []).map((i) => {
       const product = (i as any).product as { store?: Store; images?: ProductImage[] } | undefined;
@@ -1502,6 +1775,12 @@ class OrderService {
       deliveryCharge: Number(publicOrder.deliveryCharge),
       couponCode: publicOrder.couponCode as string | null,
     });
+    const activeReturn = resolveActiveReturn(order.id, activeReturnByOrderId);
+    const historyEvents = statusHistoryByOrderId?.get(order.id) ?? [];
+    const statusHistory: OrderStatusEvent[] = [
+      { status: 'pending', occurredAt: publicOrder.createdAt as string, source: 'system' },
+      ...historyEvents,
+    ];
 
     return {
       ...publicOrder,
@@ -1512,11 +1791,14 @@ class OrderService {
       shadowfaxOrderId:
         publicOrder.shadowfaxOrderId ??
         resolveShadowfaxOrderId(order.id, shadowfaxOrderIdByOrderId),
+      returnId: activeReturn?.id ?? null,
+      returnShadowfaxOrderId: activeReturn?.shadowfaxOrderId ?? null,
       riderDetails: extractRiderDetailsFromOrder(order),
       cancellation: extractCancellationFromOrder(order),
       payments,
       deliveryWaivedReason,
       deliveryConfig: getPublicDeliveryConfig(),
+      statusHistory,
     };
   }
 }

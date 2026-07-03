@@ -359,3 +359,94 @@ export const getPaymentConfigSchema: FastifySchema = {
     401: errorResponse,
   },
 };
+
+const adminUserSummary = {
+  type: 'object',
+  nullable: true,
+  properties: {
+    id: { type: 'string' },
+    name: { type: 'string', nullable: true },
+    phone: { type: 'string', nullable: true },
+    email: { type: 'string', nullable: true },
+  },
+} as const;
+
+const adminPaymentObject = {
+  type: 'object',
+  properties: {
+    ...paymentObject.properties,
+    user: adminUserSummary,
+  },
+} as const;
+
+export const adminListPaymentsSchema: FastifySchema = {
+  tags: ['Payments — Admin'],
+  summary: 'List all payments (admin only)',
+  security: [{ BearerAuth: [] }],
+  querystring: {
+    type: 'object',
+    properties: {
+      page: { type: 'number', minimum: 1, default: 1 },
+      limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
+      status: {
+        type: 'string',
+        enum: ['pending', 'captured', 'failed', 'refund_requested', 'refunded'],
+      },
+      userId: { type: 'string', format: 'uuid' },
+      orderId: { type: 'string' },
+      email: { type: 'string' },
+      provider: { type: 'string' },
+      from: { type: 'string', format: 'date-time' },
+      to: { type: 'string', format: 'date-time' },
+    },
+    additionalProperties: false,
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            payments: { type: 'array', items: adminPaymentObject },
+            pagination: {
+              type: 'object',
+              properties: {
+                total: { type: 'number' },
+                page: { type: 'number' },
+                limit: { type: 'number' },
+                totalPages: { type: 'number' },
+              },
+            },
+          },
+        },
+      },
+    },
+    401: errorResponse,
+    403: errorResponse,
+  },
+};
+
+export const adminGetPaymentSchema: FastifySchema = {
+  tags: ['Payments — Admin'],
+  summary: 'Get payment by ID (admin only)',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['paymentId'],
+    properties: { paymentId: { type: 'string', format: 'uuid' } },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', properties: { payment: adminPaymentObject } },
+      },
+    },
+    401: errorResponse,
+    403: errorResponse,
+    404: errorResponse,
+  },
+};

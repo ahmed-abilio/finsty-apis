@@ -9,12 +9,14 @@ import { AppError } from '@utils/appError';
 export interface CreateSubCategoryInput {
   name: string;
   description?: string;
+  canReturn?: boolean;
 }
 
 export interface UpdateSubCategoryInput {
   name?: string;
   description?: string;
   isActive?: boolean;
+  canReturn?: boolean;
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────

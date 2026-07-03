@@ -65,6 +65,20 @@ const categoryObject = {
   },
 } as const;
 
+const subCategoryObject = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    categoryId: { type: 'string', format: 'uuid' },
+    name: { type: 'string' },
+    description: { type: 'string', nullable: true },
+    isActive: { type: 'boolean' },
+    canReturn: { type: 'boolean' },
+    createdAt: { type: 'string', nullable: true },
+    updatedAt: { type: 'string', nullable: true },
+  },
+} as const;
+
 const brandObject = {
   type: 'object',
   properties: {
@@ -167,7 +181,7 @@ const productObject = {
     images: { type: 'array', items: imageObject },
     colors: { type: 'array', items: colorObject },
     category: { ...categoryObject, type: ['object', 'null'] },
-    subCategory: { ...categoryObject, type: ['object', 'null'] },
+    subCategory: { ...subCategoryObject, type: ['object', 'null'] },
     isWishlisted: { type: 'boolean', description: 'True if the current user has this product in their wishlist' },
   },
 } as const;
@@ -833,7 +847,7 @@ const productSummaryObject = {
     createdAt: { type: 'string', nullable: true },
     images: { type: 'array', items: imageObject },
     category: { ...categoryObject, type: ['object', 'null'] },
-    subCategory: { ...categoryObject, type: ['object', 'null'] },
+    subCategory: { ...subCategoryObject, type: ['object', 'null'] },
     isWishlisted: { type: 'boolean' },
   },
 } as const;

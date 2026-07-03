@@ -79,6 +79,11 @@ class UserController {
       data: { message: 'Device token registered' },
     });
   }
+
+  async getAdminContact(_request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const contact = await userService.getAdminContact();
+    void reply.status(200).send({ success: true, data: contact });
+  }
 }
 
 export default new UserController();

@@ -41,6 +41,7 @@ export interface OrderAttributes {
   riderName: string | null;
   riderPhone: string | null;
   deliveryMetadata: object | null;
+  isDispatchReady: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -67,6 +68,7 @@ export interface OrderCreationAttributes
     | 'riderName'
     | 'riderPhone'
     | 'deliveryMetadata'
+    | 'isDispatchReady'
   > {}
 
 class Order extends Model<OrderAttributes, OrderCreationAttributes> implements OrderAttributes {
@@ -96,6 +98,7 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
   declare riderName: string | null;
   declare riderPhone: string | null;
   declare deliveryMetadata: object | null;
+  declare isDispatchReady: boolean;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -127,6 +130,7 @@ class Order extends Model<OrderAttributes, OrderCreationAttributes> implements O
       riderName: this.riderName ?? null,
       riderPhone: this.riderPhone ?? null,
       deliveryMetadata: this.deliveryMetadata ?? null,
+      isDispatchReady: Boolean(this.isDispatchReady),
       createdAt: this.createdAt?.toISOString?.() ?? null,
       updatedAt: this.updatedAt?.toISOString?.() ?? null,
     };
@@ -274,6 +278,12 @@ Order.init(
       type: DataTypes.JSONB,
       allowNull: true,
       field: 'delivery_metadata',
+    },
+    isDispatchReady: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: 'is_dispatch_ready',
     },
   },
   {

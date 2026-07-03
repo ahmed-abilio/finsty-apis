@@ -14,37 +14,54 @@ const shadowfaxReconciliationQueue = new Queue(
 
 const STALE_ACTIVE_JOB_MS = 40 * 60 * 1000;
 
+/**
+ * Best-effort cleanup of *orphaned* reconciliation runs left behind by a worker
+ * that crashed mid-job. This is purely housekeeping and MUST never throw, or it
+ * would crash server startup.
+ *
+ * Important production-safety notes:
+ *  - We only reclaim `active` jobs that have been stuck longer than the stale
+ *    threshold. A job actively owned by a live worker is locked; trying to remove
+ *    it throws "locked by another worker". With multiple instances/workers this
+ *    is expected, so any such error is caught and ignored.
+ *  - We deliberately do NOT touch `waiting`/`delayed` jobs. The recurring
+ *    `delayed` job is the scheduler's next iteration (`repeat:...`) and is managed
+ *    idempotently by `upsertJobScheduler` below — removing it here is both
+ *    unnecessary and the source of the lock crash.
+ */
 async function clearStaleReconciliationJobs(): Promise<void> {
-  const jobs = await shadowfaxReconciliationQueue.getJobs(['waiting', 'delayed', 'active']);
+  let jobs;
+  try {
+    jobs = await shadowfaxReconciliationQueue.getJobs(['active']);
+  } catch (err) {
+    logger.warn({ err }, 'Skipped Shadowfax reconciliation cleanup: could not list active jobs');
+    return;
+  }
+
   let cleared = 0;
 
   for (const job of jobs) {
     if (job.name !== SHADOWFAX_RECONCILIATION_JOB_NAME) continue;
 
-    const state = await job.getState();
-    if (state === 'active') {
-      const processedOn = job.processedOn ?? job.timestamp;
-      const isStale = processedOn != null && Date.now() - processedOn > STALE_ACTIVE_JOB_MS;
-      if (!isStale) {
-        continue;
-      }
+    const processedOn = job.processedOn ?? job.timestamp;
+    const isStale = processedOn != null && Date.now() - processedOn > STALE_ACTIVE_JOB_MS;
+    if (!isStale) continue;
 
-      try {
-        await job.moveToFailed(new Error('Cleared stale active reconciliation job on startup'), '0', false);
-        cleared += 1;
-      } catch {
-        try {
-          await job.remove();
-          cleared += 1;
-        } catch {
-          // Still locked by a live worker — leave it alone.
-        }
-      }
-      continue;
+    try {
+      await job.moveToFailed(
+        new Error('Cleared stale active reconciliation job on startup'),
+        '0',
+        false,
+      );
+      cleared += 1;
+    } catch (err) {
+      // Job is locked by a live worker (normal with concurrent instances) or has
+      // already moved on. Leave it alone — never crash startup over housekeeping.
+      logger.warn(
+        { err, jobId: job.id },
+        'Skipped locked/in-flight Shadowfax reconciliation job during cleanup',
+      );
     }
-
-    await job.remove();
-    cleared += 1;
   }
 
   if (cleared > 0) {
@@ -53,16 +70,30 @@ async function clearStaleReconciliationJobs(): Promise<void> {
 }
 
 export async function scheduleShadowfaxReconciliationJob(): Promise<void> {
-  const legacyRepeatables = await shadowfaxReconciliationQueue.getRepeatableJobs();
-  for (const repeatJob of legacyRepeatables) {
-    await shadowfaxReconciliationQueue.removeRepeatableByKey(repeatJob.key);
-  }
-
-  const schedulers = await shadowfaxReconciliationQueue.getJobSchedulers();
-  for (const scheduler of schedulers) {
-    if (scheduler.key !== SHADOWFAX_RECONCILIATION_SCHEDULER_ID) {
-      await shadowfaxReconciliationQueue.removeJobScheduler(scheduler.key);
+  // Remove stale/legacy schedulers so dev restarts and renamed jobs don't stack
+  // intervals. These are best-effort: a key locked by another worker/instance
+  // must not crash startup, since `upsertJobScheduler` below is idempotent.
+  try {
+    const legacyRepeatables = await shadowfaxReconciliationQueue.getRepeatableJobs();
+    for (const repeatJob of legacyRepeatables) {
+      try {
+        await shadowfaxReconciliationQueue.removeRepeatableByKey(repeatJob.key);
+      } catch (err) {
+        logger.warn({ err, key: repeatJob.key }, 'Skipped removing locked legacy repeatable job');
+      }
     }
+
+    const schedulers = await shadowfaxReconciliationQueue.getJobSchedulers();
+    for (const scheduler of schedulers) {
+      if (scheduler.key === SHADOWFAX_RECONCILIATION_SCHEDULER_ID) continue;
+      try {
+        await shadowfaxReconciliationQueue.removeJobScheduler(scheduler.key);
+      } catch (err) {
+        logger.warn({ err, key: scheduler.key }, 'Skipped removing locked job scheduler');
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Shadowfax reconciliation scheduler cleanup encountered an error; continuing');
   }
 
   await clearStaleReconciliationJobs();

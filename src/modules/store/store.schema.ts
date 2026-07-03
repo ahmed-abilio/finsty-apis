@@ -95,6 +95,19 @@ const storeObject = {
   },
 } as const;
 
+const storeOwnerSummaryObject = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    name: { type: ['string', 'null'] },
+    email: { type: ['string', 'null'] },
+    phone: { type: ['string', 'null'] },
+    role: { type: 'string' },
+    isActive: { type: 'boolean' },
+    profileImage: { type: ['string', 'null'] },
+  },
+} as const;
+
 // Admin store shape — includes KYC document URLs and bank details
 const storeObjectAdmin = {
   type: 'object',
@@ -105,6 +118,7 @@ const storeObjectAdmin = {
     aadharCardUrl: { type: ['string', 'null'] },
     additionalDocuments: { type: 'array', items: { type: 'string' } },
     bankDetails: { ...bankDetailsObject, type: ['object', 'null'] },
+    owner: { ...storeOwnerSummaryObject, type: ['object', 'null'] },
   },
 } as const;
 
@@ -190,6 +204,7 @@ const subCategoryObjectInline = {
     name: { type: 'string' },
     description: { type: ['string', 'null'] },
     isActive: { type: 'boolean' },
+    canReturn: { type: 'boolean' },
   },
 } as const;
 
@@ -237,6 +252,7 @@ const subCategoryObject = {
     name: { type: 'string' },
     description: { type: ['string', 'null'] },
     isActive: { type: 'boolean' },
+    canReturn: { type: 'boolean' },
     createdAt: { type: ['string', 'null'] },
     updatedAt: { type: ['string', 'null'] },
   },
@@ -309,6 +325,7 @@ export const listStoresSchema: FastifySchema = {
       minRating: { type: 'number', minimum: 0, maximum: 5, description: 'Minimum store rating' },
       search: { type: 'string', description: 'Search by store name, description, or city' },
       city: { type: 'string', description: 'Filter by city name' },
+      email: { type: 'string', description: 'Filter by store contact email' },
       page: { type: 'number', minimum: 1, default: 1 },
       limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
       isActive: { 
@@ -366,7 +383,7 @@ export const getStoreSchema: FastifySchema = {
       type: 'object',
       properties: {
         success: { type: 'boolean' },
-        data: { type: 'object', properties: { store: storeObject } },
+        data: { type: 'object', properties: { store: storeObjectAdmin } },
       },
     },
     401: unauthorized,
@@ -1164,7 +1181,8 @@ export const getStoreAttributesSchema: FastifySchema = {
 export const getStoreBySlugSchema: FastifySchema = {
   tags: ['Stores'],
   summary: 'Get store by slug',
-  description: 'Fetch a single active store by its URL-friendly slug.',
+  description:
+    'Fetch a single store by its URL-friendly slug. Admins receive full store details including inactive/pending applications.',
   params: {
     type: 'object',
     required: ['slug'],
@@ -1175,9 +1193,10 @@ export const getStoreBySlugSchema: FastifySchema = {
       type: 'object',
       properties: {
         success: { type: 'boolean' },
-        data: { type: 'object', properties: { store: storeObject } },
+        data: { type: 'object', properties: { store: storeObjectAdmin } },
       },
     },
+    401: unauthorized,
     404: notFound,
   },
 };

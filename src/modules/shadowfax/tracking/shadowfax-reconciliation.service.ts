@@ -1,6 +1,7 @@
 import { Op } from 'sequelize';
 import Order, { type OrderStatus } from '@modules/order/order.model';
 import logger from '@utils/logger';
+import { AppError } from '@utils/appError';
 import { incrementShadowfaxMetric } from '@observability/shadowfax.metrics';
 import shadowfaxStatusService from '@modules/shadowfax/shadowfaxStatus.service';
 import { deleteRiderLocationsOlderThan } from './order-rider-location.repository';
@@ -23,7 +24,7 @@ function throwIfAborted(signal?: AbortSignal): void {
 
 export async function runShadowfaxReconciliation(
   signal?: AbortSignal,
-): Promise<{ checked: number; fixed: number }> {
+): Promise<{ checked: number; fixed: number; abortedUnreachable: boolean }> {
   const orders = await Order.findAll({
     where: {
       status: { [Op.in]: ACTIVE_STATUSES },
@@ -33,12 +34,16 @@ export async function runShadowfaxReconciliation(
   });
 
   let fixed = 0;
+  let checked = 0;
+  let abortedUnreachable = false;
 
   for (const order of orders) {
     throwIfAborted(signal);
 
     const sfxId = order.shadowfaxOrderId;
     if (sfxId == null) continue;
+
+    checked += 1;
 
     try {
       const remote = await shadowfaxStatusService.fetchOrderStatus(String(sfxId));
@@ -54,6 +59,17 @@ export async function runShadowfaxReconciliation(
         logger.info({ orderId: order.id, from: order.status }, 'shadowfax_reconciliation_fix');
       }
     } catch (err) {
+      // A connectivity/timeout failure means Shadowfax itself is unreachable, so every
+      // remaining order in this run would fail identically. Abort early and log once at
+      // WARN instead of emitting a full error stack per active order.
+      if (err instanceof AppError && err.code === 'SHADOWFAX_UNAVAILABLE') {
+        abortedUnreachable = true;
+        logger.warn(
+          { reason: err.message, checked, remaining: orders.length - checked },
+          'shadowfax_reconciliation_unreachable_aborted',
+        );
+        break;
+      }
       logger.error({ err, orderId: order.id }, 'shadowfax_reconciliation_order_failed');
     }
   }
@@ -64,5 +80,5 @@ export async function runShadowfaxReconciliation(
     logger.info({ deleted }, 'rider_location_retention_cleanup');
   }
 
-  return { checked: orders.length, fixed };
+  return { checked, fixed, abortedUnreachable };
 }

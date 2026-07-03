@@ -11,7 +11,11 @@ import {
   mapShadowfaxCancelStatusToLabel,
 } from './shadowfax-cancel-fields';
 import { transitionOrderStatus } from './order-status-transition.service';
-import { resolveOrderByClientOrderId } from './order-lookup.service';
+import {
+  resolveOrderByClientOrderId,
+  resolveOrderReturnByClientOrderId,
+} from './order-lookup.service';
+import { processReturnShadowfaxWebhook } from './order-return-shadowfax.processor';
 import { markWebhookEventProcessed } from './shadowfax-webhook-event.repository';
 import type { ShadowfaxWebhookPayload } from './shadowfax-webhook.types';
 import {
@@ -139,6 +143,22 @@ export async function processShadowfaxWebhookEvent(eventId: string): Promise<voi
     if (!clientOrderId) {
       await markWebhookEventProcessed(eventId, 'missing_client_order_id');
       incrementShadowfaxMetric('shadowfax_webhooks_processed_total');
+      return;
+    }
+
+    const orderReturn = await resolveOrderReturnByClientOrderId(
+      clientOrderId,
+      extractSfxOrderId(payload),
+    );
+    if (orderReturn) {
+      const result = await processReturnShadowfaxWebhook(orderReturn, payload);
+      const remarks = result.applied ? null : result.reason ?? null;
+      await markWebhookEventProcessed(eventId, remarks);
+      incrementShadowfaxMetric('shadowfax_webhooks_processed_total');
+      logger.info(
+        { returnId: orderReturn.id, shadowfaxStatus, applied: result.applied },
+        'shadowfax_return_webhook_processed',
+      );
       return;
     }
 

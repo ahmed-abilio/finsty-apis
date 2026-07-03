@@ -60,6 +60,7 @@ const subCategoryObject = {
     name: { type: 'string' },
     description: { type: 'string', nullable: true },
     isActive: { type: 'boolean' },
+    canReturn: { type: 'boolean' },
     createdAt: { type: 'string', nullable: true },
     updatedAt: { type: 'string', nullable: true },
   },
@@ -87,6 +88,7 @@ export const createSubCategorySchema: FastifySchema = {
     properties: {
       name: { type: 'string', minLength: 1, maxLength: 100 },
       description: { type: 'string' },
+      canReturn: { type: 'boolean' },
     },
     additionalProperties: false,
   },
@@ -190,6 +192,7 @@ export const updateSubCategorySchema: FastifySchema = {
       name: { type: 'string', minLength: 1, maxLength: 100 },
       description: { type: 'string' },
       isActive: { type: 'boolean' },
+      canReturn: { type: 'boolean' },
     },
     additionalProperties: false,
   },

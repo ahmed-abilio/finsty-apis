@@ -3,6 +3,7 @@ import { Worker, Job } from 'bullmq';
 import { getWorkerOptions } from '@config/bullmq';
 import { SHADOWFAX_QUEUE_NAME, type ShadowfaxJobData } from './shadowfaxQueue';
 import { placeOrderForFinstyOrder } from '@modules/shadowfax/shadowfaxPlacement.service';
+import { placeReturnOrderForFinstyReturn } from '@modules/shadowfax/shadowfaxReturnPlacement.service';
 import { processShadowfaxWebhookEvent } from '@modules/shadowfax/tracking/shadowfax-webhook.processor';
 import logger from '@utils/logger';
 
@@ -23,6 +24,13 @@ const NON_RETRYABLE_FAILURE_PREFIXES = [
 async function processShadowfaxJob(job: Job<ShadowfaxJobData>): Promise<void> {
   if (job.data.type === 'process_shadowfax_webhook') {
     await processShadowfaxWebhookEvent(job.data.eventId);
+    return;
+  }
+
+  if (job.data.type === 'place_shadowfax_return_order') {
+    const { orderReturnId } = job.data;
+    logger.info({ jobId: job.id, orderReturnId }, 'Processing Shadowfax return placement job');
+    await placeReturnOrderForFinstyReturn(orderReturnId);
     return;
   }
 

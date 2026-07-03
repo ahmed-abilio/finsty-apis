@@ -29,7 +29,10 @@ import CouponUsage from '@modules/coupon/coupon-usage.model';
 import Brand from '@modules/brand/brand.model';
 import Category from '@modules/category/category.model';
 import SubCategory from '@modules/sub-category/sub-category.model';
+import OrderReturn from '@modules/order/order-return.model';
+import OrderReturnItem from '@modules/order/order-return-item.model';
 import ShadowfaxShipment from '@modules/shadowfax/shadowfax-shipment.model';
+import ShadowfaxReturnShipment from '@modules/shadowfax/shadowfax-return-shipment.model';
 import OrderStatusHistory from '@modules/shadowfax/tracking/order-status-history.model';
 import ShadowfaxWebhookEvent from '@modules/shadowfax/tracking/shadowfax-webhook-event.model';
 import OrderRiderLocation from '@modules/shadowfax/tracking/order-rider-location.model';
@@ -121,6 +124,16 @@ Order.belongsTo(Address, { foreignKey: 'addressId', as: 'address' });
 // ─── Order ↔ ShadowfaxShipment ───────────────────────────────────────────────
 Order.hasOne(ShadowfaxShipment, { foreignKey: 'orderId', as: 'shadowfaxShipment' });
 ShadowfaxShipment.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
+
+// ─── Order ↔ OrderReturn ─────────────────────────────────────────────────────
+Order.hasMany(OrderReturn, { foreignKey: 'orderId', as: 'returns' });
+OrderReturn.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
+OrderReturn.belongsTo(Store, { foreignKey: 'storeId', as: 'store' });
+OrderReturn.hasMany(OrderReturnItem, { foreignKey: 'orderReturnId', as: 'items' });
+OrderReturnItem.belongsTo(OrderReturn, { foreignKey: 'orderReturnId', as: 'orderReturn' });
+OrderReturnItem.belongsTo(OrderItem, { foreignKey: 'orderItemId', as: 'orderItem' });
+OrderReturn.hasOne(ShadowfaxReturnShipment, { foreignKey: 'orderReturnId', as: 'shadowfaxShipment' });
+ShadowfaxReturnShipment.belongsTo(OrderReturn, { foreignKey: 'orderReturnId', as: 'orderReturn' });
 
 Order.hasMany(OrderStatusHistory, { foreignKey: 'orderId', as: 'statusHistory' });
 OrderStatusHistory.belongsTo(Order, { foreignKey: 'orderId', as: 'order' });
@@ -217,7 +230,10 @@ export {
   Payment,
   Coupon,
   CouponUsage,
+  OrderReturn,
+  OrderReturnItem,
   ShadowfaxShipment,
+  ShadowfaxReturnShipment,
   OrderStatusHistory,
   ShadowfaxWebhookEvent,
   OrderRiderLocation,

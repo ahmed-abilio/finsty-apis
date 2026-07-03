@@ -58,6 +58,8 @@ export type OrderStatusSource =
   | 'shadowfax_dev_local_callback'
   | 'vendor'
   | 'admin'
+  | 'user'
+  | 'payment'
   | 'system';
 
 export interface OrderStatusChangedEvent {

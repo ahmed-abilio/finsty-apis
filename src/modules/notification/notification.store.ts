@@ -5,12 +5,13 @@ import { notifyVendor } from './notification.service';
 
 /** Notify every active admin that a vendor store application needs review. */
 export async function notifyAdminsNewStoreApplication(
-  store: Pick<Store, 'id' | 'name' | 'ownerId' | 'city'>,
+  store: Pick<Store, 'id' | 'name' | 'ownerId' | 'city' | 'slug'>,
 ): Promise<void> {
   await notifyAllAdmins(
     NotificationType.ADMIN_STORE_APPLICATION,
     {
       storeId: store.id,
+      storeSlug: store.slug,
       storeName: store.name,
       ownerId: store.ownerId ?? '',
       city: store.city ?? '',

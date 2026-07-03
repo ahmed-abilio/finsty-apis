@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
-import orderController, { VendorListOrdersQuery } from './order.controller';
+import orderController, { AdminListOrdersQuery, VendorListOrdersQuery } from './order.controller';
+import orderReturnController from './orderReturn.controller';
 import {
   createOrderSchema,
   getJobStatusSchema,
@@ -10,10 +11,21 @@ import {
   cancelOrderSchema,
   payWithWalletSchema,
   adminUpdateStatusSchema,
+  adminListOrdersSchema,
+  adminGetOrderSchema,
   vendorGetOrderSchema,
   vendorDispatchReadySchema,
   vendorUpdateStatusSchema,
 } from './order.schema';
+import {
+  createOrderReturnSchema,
+  listOrderReturnsSchema,
+  getOrderReturnSchema,
+  getOrderReturnDeliveryStatusSchema,
+  listVendorReturnsSchema,
+  approveVendorReturnSchema,
+  rejectVendorReturnSchema,
+} from './orderReturn.schema';
 import { Roles } from '@modules/user/user.model';
 
 export default async function orderRoutes(fastify: FastifyInstance): Promise<void> {
@@ -68,6 +80,57 @@ export default async function orderRoutes(fastify: FastifyInstance): Promise<voi
     orderController.vendorDispatchReady.bind(orderController),
   );
 
+  fastify.get<{ Querystring: { status?: string; page?: number; limit?: number } }>(
+    '/vendor/returns',
+    {
+      preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
+      schema: listVendorReturnsSchema,
+    },
+    orderReturnController.vendorList.bind(orderReturnController),
+  );
+
+  fastify.post<{ Params: { returnId: string } }>(
+    '/vendor/returns/:returnId/approve',
+    {
+      preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
+      schema: approveVendorReturnSchema,
+    },
+    orderReturnController.vendorApprove.bind(orderReturnController),
+  );
+
+  fastify.post<{ Params: { returnId: string }; Body: { reason?: string } }>(
+    '/vendor/returns/:returnId/reject',
+    {
+      preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
+      schema: rejectVendorReturnSchema,
+    },
+    orderReturnController.vendorReject.bind(orderReturnController),
+  );
+
+  fastify.post(
+    '/:orderId/returns',
+    { schema: createOrderReturnSchema },
+    orderReturnController.create.bind(orderReturnController),
+  );
+
+  fastify.get(
+    '/:orderId/returns',
+    { schema: listOrderReturnsSchema },
+    orderReturnController.list.bind(orderReturnController),
+  );
+
+  fastify.get(
+    '/:orderId/returns/:returnId/delivery-status',
+    { schema: getOrderReturnDeliveryStatusSchema },
+    orderReturnController.getDeliveryStatus.bind(orderReturnController),
+  );
+
+  fastify.get(
+    '/:orderId/returns/:returnId',
+    { schema: getOrderReturnSchema },
+    orderReturnController.getOne.bind(orderReturnController),
+  );
+
   fastify.get(
     '/:orderId/delivery-status',
     { schema: getOrderDeliveryStatusSchema },
@@ -84,6 +147,18 @@ export default async function orderRoutes(fastify: FastifyInstance): Promise<voi
 export async function adminOrderRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('onRequest', fastify.authenticate);
   fastify.addHook('onRequest', fastify.requireRole(Roles.ADMIN));
+
+  fastify.get<{ Querystring: AdminListOrdersQuery }>(
+    '/',
+    { schema: adminListOrdersSchema },
+    orderController.adminList.bind(orderController) as any,
+  );
+
+  fastify.get<{ Params: { orderId: string } }>(
+    '/:orderId',
+    { schema: adminGetOrderSchema },
+    orderController.adminGetOne.bind(orderController) as any,
+  );
 
   fastify.patch(
     '/:orderId/status',

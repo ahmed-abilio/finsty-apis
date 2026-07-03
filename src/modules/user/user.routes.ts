@@ -6,6 +6,7 @@ import {
   deleteMeSchema,
   confirmAvatarSchema,
   registerDeviceTokenSchema,
+  getAdminContactSchema,
 } from './user.schema';
 
 export default async function userRoutes(fastify: FastifyInstance): Promise<void> {
@@ -36,5 +37,11 @@ export default async function userRoutes(fastify: FastifyInstance): Promise<void
     '/me/device-token',
     { schema: registerDeviceTokenSchema },
     userController.registerDeviceToken.bind(userController),
+  );
+
+  fastify.get(
+    '/admin-contact',
+    { schema: getAdminContactSchema },
+    userController.getAdminContact.bind(userController),
   );
 }

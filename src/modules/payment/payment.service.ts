@@ -3,11 +3,13 @@ import { v4 as uuidv4 } from 'uuid';
 import type { Transaction } from 'sequelize';
 import sequelize from '@config/database';
 import { AppError } from '@utils/appError';
+import { Op } from 'sequelize';
 import { paymentProvider } from '@utils/paymentProvider';
 import logger from '@utils/logger';
 
 import Payment, { PaymentStatus } from './payment.model';
 import Order from '@modules/order/order.model';
+import User from '@modules/user/user.model';
 import Wallet from '@modules/wallet/wallet.model';
 import WalletTransaction from '@modules/wallet/wallet-transaction.model';
 import CartItem from '@modules/cart/cart-item.model';
@@ -22,6 +24,9 @@ import {
   notifyOrderPlacedAfterPayment,
   notifyPaymentCancelled,
 } from '@modules/notification/notification.order';
+import { buildOrderRefWhere } from '@modules/order/orderRef';
+import { transitionOrderStatus } from '@modules/shadowfax/tracking/order-status-transition.service';
+import userService from '@modules/user/user.service';
 
 // ─── State machine: valid transitions ─────────────────────────────────────────
 
@@ -199,7 +204,13 @@ class PaymentService {
           });
 
           if (lockedOrder) {
-            await lockedOrder.update({ status: 'confirmed' }, { transaction: t });
+            await transitionOrderStatus({
+              orderId: lockedOrder.id,
+              toStatus: 'confirmed',
+              source: 'payment',
+              transaction: t,
+              skipPublish: true,
+            });
 
             if (lockedOrder.deliveryType === 'delivery') {
               deliveryOrderIdForShadowfax = lockedOrder.id;
@@ -516,7 +527,13 @@ class PaymentService {
         });
 
         if (order) {
-          await order.update({ status: 'confirmed' }, { transaction: t });
+          await transitionOrderStatus({
+            orderId: order.id,
+            toStatus: 'confirmed',
+            source: 'payment',
+            transaction: t,
+            skipPublish: true,
+          });
 
           if (order.deliveryType === 'delivery') {
             confirmedDeliveryOrder = order;
@@ -785,6 +802,139 @@ class PaymentService {
       page,
       limit,
     };
+  }
+
+  async listForAdmin(
+    filters: {
+      page?: number;
+      limit?: number;
+      status?: PaymentStatus;
+      userId?: string;
+      orderId?: string;
+      email?: string;
+      provider?: string;
+      from?: string;
+      to?: string;
+    } = {},
+  ) {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(1, filters.limit ?? 20));
+    const offset = (page - 1) * limit;
+    const where: Record<string, unknown> = {};
+
+    if (filters.status) where.status = filters.status;
+    if (filters.userId) where.userId = filters.userId;
+    if (filters.provider) where.provider = filters.provider;
+
+    if (filters.email?.trim()) {
+      const userIds = await userService.findIdsByEmail(filters.email);
+      if (userIds.length === 0) {
+        return {
+          payments: [],
+          pagination: { total: 0, page, limit, totalPages: 1 },
+        };
+      }
+      where.userId = { [Op.in]: userIds };
+    }
+
+    if (filters.from || filters.to) {
+      if (!filters.from || !filters.to) {
+        throw AppError.badRequest(
+          'Both from and to are required when filtering by date',
+          'INVALID_DATE_RANGE',
+        );
+      }
+      where.createdAt = {
+        [Op.gte]: new Date(filters.from),
+        [Op.lte]: new Date(filters.to),
+      };
+    }
+
+    if (filters.orderId) {
+      const orderWhere = await buildOrderRefWhere(filters.orderId);
+      const order = await Order.findOne({ where: orderWhere, attributes: ['id'] });
+      if (!order) {
+        return {
+          payments: [],
+          pagination: { total: 0, page, limit, totalPages: 1 },
+        };
+      }
+      where.orderId = order.id;
+    }
+
+    const { count, rows } = await Payment.findAndCountAll({
+      where,
+      order: [['createdAt', 'DESC']],
+      limit,
+      offset,
+    });
+
+    const userSummaries = new Map<string, { id: string; name: string | null; phone: string | null; email: string | null }>();
+    await Promise.all(
+      [...new Set(rows.map((p) => p.userId))].map(async (userId) => {
+        try {
+          const user = await userService.getByIdForAdmin(userId);
+          userSummaries.set(userId, {
+            id: user.id,
+            name: user.name,
+            phone: user.phone,
+            email: user.email,
+          });
+        } catch {
+          const fallback = await User.findByPk(userId, {
+            attributes: ['id', 'name', 'phone', 'email'],
+          });
+          if (fallback) {
+            userSummaries.set(userId, {
+              id: fallback.id,
+              name: fallback.name,
+              phone: fallback.phone,
+              email: fallback.email,
+            });
+          }
+        }
+      }),
+    );
+
+    return {
+      payments: rows.map((p) => ({
+        ...p.toPublicJSON(),
+        user: userSummaries.get(p.userId) ?? null,
+      })),
+      pagination: {
+        total: count,
+        page,
+        limit,
+        totalPages: Math.ceil(count / limit) || 1,
+      },
+    };
+  }
+
+  async getByIdForAdmin(paymentId: string) {
+    const payment = await this.getPayment('', paymentId, true);
+    let user = null;
+    try {
+      user = await userService.getByIdForAdmin(payment.userId as string);
+    } catch {
+      const fallback = await User.findByPk(payment.userId as string, {
+        attributes: ['id', 'name', 'phone', 'email'],
+      });
+      if (fallback) {
+        user = {
+          id: fallback.id,
+          name: fallback.name,
+          phone: fallback.phone,
+          email: fallback.email,
+          role: 'user',
+          isActive: fallback.isActive,
+          provider: String(fallback.provider),
+          profileImage: fallback.profileImage,
+          createdAt: fallback.createdAt?.toISOString() ?? '',
+          updatedAt: fallback.updatedAt?.toISOString() ?? '',
+        };
+      }
+    }
+    return { ...payment, user };
   }
 
   // ─── Cancel incomplete (checkout dismissed) ────────────────────────────────

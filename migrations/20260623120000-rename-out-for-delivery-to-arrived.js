@@ -8,13 +8,13 @@ module.exports = {
     `);
     await queryInterface.sequelize.query(`
       UPDATE order_status_history
-      SET from_status = 'arrived'
-      WHERE from_status = 'out_for_delivery';
+      SET old_status = 'arrived'
+      WHERE old_status = 'out_for_delivery';
     `);
     await queryInterface.sequelize.query(`
       UPDATE order_status_history
-      SET to_status = 'arrived'
-      WHERE to_status = 'out_for_delivery';
+      SET new_status = 'arrived'
+      WHERE new_status = 'out_for_delivery';
     `);
   },
 
@@ -24,13 +24,13 @@ module.exports = {
     `);
     await queryInterface.sequelize.query(`
       UPDATE order_status_history
-      SET from_status = 'out_for_delivery'
-      WHERE from_status = 'arrived';
+      SET old_status = 'out_for_delivery'
+      WHERE old_status = 'arrived';
     `);
     await queryInterface.sequelize.query(`
       UPDATE order_status_history
-      SET to_status = 'out_for_delivery'
-      WHERE to_status = 'arrived';
+      SET new_status = 'out_for_delivery'
+      WHERE new_status = 'arrived';
     `);
   },
 };

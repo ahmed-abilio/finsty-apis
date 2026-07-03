@@ -15,7 +15,11 @@ vi.mock('./pending-order.model', () => ({ default: {} }));
 vi.mock('@modules/address/address.model', () => ({ default: {} }));
 vi.mock('@modules/wallet/wallet.model', () => ({ default: {} }));
 vi.mock('@modules/wallet/wallet-transaction.model', () => ({ default: {} }));
-vi.mock('@modules/user/user.model', () => ({ default: {} }));
+vi.mock('@modules/user/user.model', () => ({
+  default: {},
+  Roles: { USER: 'user', VENDOR: 'vendor', ADMIN: 'admin' },
+}));
+vi.mock('@modules/user/user.service', () => ({ default: {} }));
 vi.mock('@modules/cart/cart-item.model', () => ({ default: {} }));
 vi.mock('@modules/product/product.model', () => ({ default: {} }));
 vi.mock('@modules/product/product-image.model', () => ({ default: {} }));
@@ -42,6 +46,9 @@ vi.mock('@modules/shadowfax/shadowfaxPlacement.service', () => ({
 vi.mock('@modules/shadowfax/shadowfaxCancel.service', () => ({
   cancelShadowfaxOrderForFinstyOrder: vi.fn(),
 }));
+vi.mock('./orderDispatchReady.service', () => ({
+  applyOrderDispatchReady: vi.fn(),
+}));
 vi.mock('@modules/shadowfax/shadowfaxDispatchReady.service', () => ({
   markShadowfaxDispatchReadyForFinstyOrder: vi.fn(),
 }));
@@ -65,6 +72,12 @@ vi.mock('@config/database', () => ({
 
 vi.mock('./orderRef', () => ({
   buildOrderRefWhere: vi.fn(async (ref: string) => ({ id: ref })),
+  throwIfOrderRefLooksLikeUserId: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('./orderReturnLookup', () => ({
+  buildActiveReturnByOrderIds: vi.fn().mockResolvedValue(new Map()),
+  resolveActiveReturn: vi.fn().mockReturnValue(null),
 }));
 
 vi.mock('./orderShadowfaxSync.service', () => ({
@@ -79,6 +92,14 @@ vi.mock('./orderWalletPaid', () => ({
 vi.mock('./orderShadowfax', () => ({
   buildShadowfaxOrderIdByOrderIds: vi.fn().mockResolvedValue(new Map()),
   resolveShadowfaxOrderId: vi.fn().mockReturnValue(null),
+}));
+
+const { buildOrderStatusHistoryByOrderIds } = vi.hoisted(() => ({
+  buildOrderStatusHistoryByOrderIds: vi.fn().mockResolvedValue(new Map()),
+}));
+
+vi.mock('./orderStatusHistoryLookup', () => ({
+  buildOrderStatusHistoryByOrderIds,
 }));
 
 import type Order from './order.model';
@@ -98,6 +119,8 @@ function buildOrderRecord(): Order {
       deliveryCharge: 0,
       couponCode: null,
       shadowfaxOrderId: null,
+      isDispatchReady: false,
+      createdAt: '2026-06-01T00:00:00.000Z',
     }),
     items: [],
     address: null,
@@ -127,8 +150,9 @@ describe('getVendorOrderById Shadowfax sync', () => {
       } as Order)
       .mockResolvedValueOnce(buildOrderRecord());
 
-    await orderService.getVendorOrderById('order-1', 'vendor-1');
+    const result = await orderService.getVendorOrderById('order-1', 'vendor-1');
 
+    expect(result.isDispatchReady).toBe(false);
     expect(maybeSync).toHaveBeenCalledWith('order-1', 'delivery', 'rider_assigned');
     expect(maybeSync.mock.invocationCallOrder[0]).toBeLessThan(
       orderFindOne.mock.invocationCallOrder[1],
@@ -137,6 +161,37 @@ describe('getVendorOrderById Shadowfax sync', () => {
     expect(orderFindOne.mock.calls[0]?.[0]).toMatchObject({
       attributes: ['id', 'deliveryType', 'status'],
     });
+  });
+
+  it('includes statusHistory with a synthesized pending entry followed by looked-up transitions', async () => {
+    storeFindOne.mockResolvedValue({ id: 'store-1' } as Store);
+    orderFindOne
+      .mockResolvedValueOnce({
+        id: 'order-1',
+        deliveryType: 'delivery',
+        status: 'rider_assigned',
+      } as Order)
+      .mockResolvedValueOnce(buildOrderRecord());
+    buildOrderStatusHistoryByOrderIds.mockResolvedValue(
+      new Map([
+        [
+          'order-1',
+          [
+            { status: 'confirmed', occurredAt: '2026-06-01T01:00:00.000Z', source: 'payment' },
+            { status: 'rider_assigned', occurredAt: '2026-06-01T02:00:00.000Z', source: 'shadowfax_webhook' },
+          ],
+        ],
+      ]),
+    );
+
+    const result = await orderService.getVendorOrderById('order-1', 'vendor-1');
+
+    expect(buildOrderStatusHistoryByOrderIds).toHaveBeenCalledWith(['order-1']);
+    expect(result.statusHistory).toEqual([
+      { status: 'pending', occurredAt: '2026-06-01T00:00:00.000Z', source: 'system' },
+      { status: 'confirmed', occurredAt: '2026-06-01T01:00:00.000Z', source: 'payment' },
+      { status: 'rider_assigned', occurredAt: '2026-06-01T02:00:00.000Z', source: 'shadowfax_webhook' },
+    ]);
   });
 
   it('does not sync when vendor order stub is not found', async () => {

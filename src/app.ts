@@ -38,6 +38,9 @@ import platformSettingsAdminRoutes from '@modules/platform-settings/platform-set
 import configRoutes from '@modules/config/config.routes';
 import notificationInboxRoutes from '@modules/notification/notification.inbox.routes';
 import { cmsRoutes, adminCmsRoutes } from '@modules/cms/cms.routes';
+import adminDashboardRoutes from '@modules/dashboard/dashboard.routes';
+import { adminUserRoutes } from '@modules/user/admin-user.routes';
+import { adminPaymentRoutes } from '@modules/payment/admin-payment.routes';
 
 import emailQueue from '@queues/emailQueue';
 import orderQueue from '@queues/orderQueue';
@@ -174,6 +177,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(configRoutes, { prefix: `${API_PREFIX}/config` });
   await fastify.register(cmsRoutes, { prefix: `${API_PREFIX}/cms` });
   await fastify.register(adminCmsRoutes, { prefix: `${API_PREFIX}/admin/cms` });
+  await fastify.register(adminDashboardRoutes, { prefix: `${API_PREFIX}/admin/dashboard` });
+  await fastify.register(adminUserRoutes, { prefix: `${API_PREFIX}/admin/users` });
+  await fastify.register(adminPaymentRoutes, { prefix: `${API_PREFIX}/admin/payments` });
   await fastify.register(notificationInboxRoutes, { prefix: `${API_PREFIX}/notifications` });
 
   // ── Bull Board admin UI ───────────────────────────────────────────────────

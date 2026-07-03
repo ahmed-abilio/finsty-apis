@@ -161,6 +161,30 @@ export function buildNotificationPayload(
         ? `Order #${orderNumber} was cancelled.`
         : 'An order for your store was cancelled.';
       break;
+    case NotificationType.RETURN_REQUESTED:
+      title = 'Return requested';
+      body = orderNumber
+        ? `Your return for order #${orderNumber} has been submitted.`
+        : 'Your return request has been submitted.';
+      break;
+    case NotificationType.VENDOR_RETURN_RECEIVED:
+      title = 'Return received';
+      body = orderNumber
+        ? `Return for order #${orderNumber} is ready for inspection.`
+        : 'A return is ready for inspection.';
+      break;
+    case NotificationType.RETURN_REFUND_APPROVED:
+      title = 'Return refund approved';
+      body = orderNumber
+        ? `₹${amount} was credited to your wallet for order #${orderNumber} return.`
+        : `₹${amount} was credited to your wallet for your return.`;
+      break;
+    case NotificationType.RETURN_REFUND_REJECTED:
+      title = 'Return rejected';
+      body = orderNumber
+        ? `Your return for order #${orderNumber} was not approved.`
+        : 'Your return was not approved.';
+      break;
     default: {
       const _exhaustive: never = type;
       void _exhaustive;

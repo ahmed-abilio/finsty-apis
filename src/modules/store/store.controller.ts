@@ -89,15 +89,18 @@ class StoreController {
       request.body.status,
       request.body.remarks,
     );
-    void reply.status(200).send({ success: true, data: { store: store.toPublicJSON() } });
+    const storeJson = await storeService.formatStoreForResponse(store, true);
+    void reply.status(200).send({ success: true, data: { store: storeJson } });
   }
 
   async update(
     request: FastifyRequest<{ Params: StoreParams; Body: UpdateStoreBody }>,
     reply: FastifyReply,
   ): Promise<void> {
+    const isAdmin = (request as { user?: { role?: string } }).user?.role === Roles.ADMIN;
     const store = await storeService.update(request.params.storeId, request.body);
-    void reply.status(200).send({ success: true, data: { store: store.toPublicJSON() } });
+    const storeJson = await storeService.formatStoreForResponse(store, isAdmin);
+    void reply.status(200).send({ success: true, data: { store: storeJson } });
   }
 
   async remove(
@@ -112,7 +115,10 @@ class StoreController {
     request: FastifyRequest<{ Querystring: StoreQuery }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const result = await storeService.search(request.query as StoreSearchQuery);
+    const isAdmin = (request as { user?: { role?: string } }).user?.role === Roles.ADMIN;
+    const result = await storeService.search(request.query as StoreSearchQuery, {
+      includeOwner: isAdmin,
+    });
     void reply.status(200).send({ success: true, data: result });
   }
 
@@ -120,10 +126,14 @@ class StoreController {
     request: FastifyRequest<{ Params: StoreParams; Querystring: { isActive?: boolean } }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const isAdmin = (request as any).user?.role === 'admin';
+    const isAdmin = (request as { user?: { role?: string } }).user?.role === Roles.ADMIN;
     const { isActive } = request.query;
-    const store = await storeService.findById(request.params.storeId, isAdmin, isActive);
-    void reply.status(200).send({ success: true, data: { store: store.toPublicJSON() } });
+    const store = await storeService.resolveStoreRef(request.params.storeId, {
+      includeInactive: isAdmin,
+      isActiveFilter: isActive,
+    });
+    const storeJson = await storeService.formatStoreForResponse(store, isAdmin);
+    void reply.status(200).send({ success: true, data: { store: storeJson } });
   }
 
   async toggleActive(
@@ -245,8 +255,12 @@ class StoreController {
     request: FastifyRequest<{ Params: { slug: string } }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const store = await storeService.findBySlug(request.params.slug);
-    void reply.status(200).send({ success: true, data: { store: store.toPublicJSON() } });
+    const isAdmin = (request as { user?: { role?: string } }).user?.role === Roles.ADMIN;
+    const store = await storeService.findBySlug(request.params.slug, {
+      includeInactive: isAdmin,
+    });
+    const storeJson = await storeService.formatStoreForResponse(store, isAdmin);
+    void reply.status(200).send({ success: true, data: { store: storeJson } });
   }
 }
 

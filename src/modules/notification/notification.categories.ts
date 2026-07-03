@@ -42,6 +42,10 @@ const TYPE_CATEGORY: Record<NotificationType, NotificationCategory> = {
   [NotificationType.VENDOR_COUPON_APPROVED]: 'promotions',
   [NotificationType.VENDOR_BANNER_APPROVED]: 'promotions',
   [NotificationType.VENDOR_ORDER_CANCELLED]: 'orders',
+  [NotificationType.RETURN_REQUESTED]: 'orders',
+  [NotificationType.VENDOR_RETURN_RECEIVED]: 'orders',
+  [NotificationType.RETURN_REFUND_APPROVED]: 'wallet',
+  [NotificationType.RETURN_REFUND_REJECTED]: 'orders',
 };
 
 export function resolveNotificationCategory(

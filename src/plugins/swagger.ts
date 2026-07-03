@@ -44,6 +44,7 @@ async function swaggerPlugin(fastify: FastifyInstance): Promise<void> {
         { name: 'Addresses', description: 'User address management' },
         { name: 'Stores', description: 'Store discovery, search, and product browsing' },
         { name: 'Vendor dashboard', description: 'Vendor KPIs, revenue reports, sales analytics, and recent orders for the authenticated store' },
+        { name: 'Admin dashboard', description: 'Admin platform KPIs, payment analytics, and recent activity' },
         { name: 'Cart', description: 'Shopping cart operations' },
         {
           name: 'Orders',

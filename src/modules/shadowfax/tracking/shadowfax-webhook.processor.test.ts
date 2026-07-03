@@ -11,17 +11,28 @@ vi.mock('./shadowfax-webhook-event.repository', () => ({
 
 vi.mock('./order-lookup.service', () => ({
   resolveOrderByClientOrderId: vi.fn(),
+  resolveOrderReturnByClientOrderId: vi.fn(),
+}));
+
+vi.mock('./order-return-shadowfax.processor', () => ({
+  processReturnShadowfaxWebhook: vi.fn(),
 }));
 
 import { transitionOrderStatus } from './order-status-transition.service';
 import { findWebhookEventById, markWebhookEventProcessed } from './shadowfax-webhook-event.repository';
-import { resolveOrderByClientOrderId } from './order-lookup.service';
+import {
+  resolveOrderByClientOrderId,
+  resolveOrderReturnByClientOrderId,
+} from './order-lookup.service';
+import { processReturnShadowfaxWebhook } from './order-return-shadowfax.processor';
 import { processShadowfaxWebhookEvent } from './shadowfax-webhook.processor';
 
 const transition = vi.mocked(transitionOrderStatus);
 const findEvent = vi.mocked(findWebhookEventById);
 const markProcessed = vi.mocked(markWebhookEventProcessed);
 const resolveOrder = vi.mocked(resolveOrderByClientOrderId);
+const resolveReturn = vi.mocked(resolveOrderReturnByClientOrderId);
+const processReturn = vi.mocked(processReturnShadowfaxWebhook);
 
 const deliveredPayload = {
   client_order_id: 'order-1',
@@ -33,6 +44,26 @@ const deliveredPayload = {
 describe('shadowfax-webhook.processor', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resolveReturn.mockResolvedValue(null);
+  });
+
+  it('routes return client_order_id to return processor', async () => {
+    findEvent.mockResolvedValue({
+      id: 'evt-return',
+      processed: false,
+      payload: {
+        client_order_id: 'return-uuid',
+        order_status: 'DELIVERED',
+      },
+    } as never);
+    resolveReturn.mockResolvedValue({ id: 'return-uuid' } as never);
+    processReturn.mockResolvedValue({ applied: true });
+
+    await processShadowfaxWebhookEvent('evt-return');
+
+    expect(processReturn).toHaveBeenCalled();
+    expect(transition).not.toHaveBeenCalled();
+    expect(markProcessed).toHaveBeenCalledWith('evt-return', null);
   });
 
   it('DELIVERED webhook updates order', async () => {

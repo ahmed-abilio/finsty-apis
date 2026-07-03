@@ -1,4 +1,5 @@
 import { AppError } from '@utils/appError';
+import logger from '@utils/logger';
 import {
   getCancelOrderUrl,
   getDispatchReadyUrl,
@@ -45,17 +46,31 @@ function extractErrorMessage(body: unknown): string | undefined {
   return payload.error ?? payload.message ?? payload.detail;
 }
 
-async function parseResponseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) {
-    return null;
+interface ParsedResponse {
+  /** Parsed JSON body, or `undefined` when the body was empty or not valid JSON. */
+  json: unknown;
+  /** Raw response text (empty string when no body). */
+  raw: string;
+  /** True when a non-empty body was present but could not be parsed as JSON. */
+  nonJson: boolean;
+}
+
+async function parseResponseBody(response: Response): Promise<ParsedResponse> {
+  const raw = await response.text();
+  if (!raw) {
+    return { json: null, raw: '', nonJson: false };
   }
 
   try {
-    return JSON.parse(text) as unknown;
+    return { json: JSON.parse(raw) as unknown, raw, nonJson: false };
   } catch {
-    throw AppError.internal('Shadowfax returned a non-JSON response', 'SHADOWFAX_UNAVAILABLE');
+    return { json: undefined, raw, nonJson: true };
   }
+}
+
+/** Truncated, single-line snippet of a raw body for safe logging/error messages. */
+function bodySnippet(raw: string, max = 300): string {
+  return raw.replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 async function requestJson(
@@ -87,20 +102,53 @@ async function requestJson(
     });
   } catch (err) {
     if (err instanceof Error && err.name === 'TimeoutError') {
+      logger.error({ method, url }, 'shadowfax_request_timed_out');
       throw AppError.internal('Shadowfax request timed out', 'SHADOWFAX_UNAVAILABLE');
     }
+    logger.error({ method, url, err }, 'shadowfax_request_failed');
     throw AppError.internal('Unable to reach Shadowfax', 'SHADOWFAX_UNAVAILABLE');
   }
 
-  const payload = await parseResponseBody(response);
+  const { json, raw, nonJson } = await parseResponseBody(response);
 
   if (!response.ok) {
-    const message = extractErrorMessage(payload) ?? errorFallback;
+    const contentType = response.headers.get('content-type');
+    const message = extractErrorMessage(json) ?? (bodySnippet(raw) || errorFallback);
     const statusCode = response.status >= 400 && response.status < 500 ? response.status : 502;
-    throw new AppError(message, statusCode, 'SHADOWFAX_UPSTREAM_ERROR');
+    logger.error(
+      {
+        method,
+        url,
+        status: response.status,
+        contentType,
+        body: bodySnippet(raw),
+      },
+      'shadowfax_upstream_error',
+    );
+    throw new AppError(message, statusCode, 'SHADOWFAX_UPSTREAM_ERROR', {
+      upstreamStatus: response.status,
+    });
   }
 
-  return payload;
+  if (nonJson) {
+    const contentType = response.headers.get('content-type');
+    logger.error(
+      {
+        method,
+        url,
+        status: response.status,
+        contentType,
+        body: bodySnippet(raw),
+      },
+      'shadowfax_non_json_response',
+    );
+    throw AppError.internal(
+      `Shadowfax returned a non-JSON response (status ${response.status})`,
+      'SHADOWFAX_UNAVAILABLE',
+    );
+  }
+
+  return json;
 }
 
 class ShadowfaxClient {

@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import storeController from './store.controller';
+import type { StoreSearchQuery } from './store.service';
 import {
   listStoresSchema,
   listStoreCategoryExplorerSchema,
@@ -25,10 +26,18 @@ import { Roles } from '@modules/user/user.model';
 
 export default async function storeRoutes(fastify: FastifyInstance): Promise<void> {
   // ─── Public / user-accessible reads ─────────────────────────────────────────
-  fastify.get('/', { schema: listStoresSchema }, storeController.list.bind(storeController));
+  fastify.get<{ Querystring: StoreSearchQuery }>(
+    '/',
+    { schema: listStoresSchema, onRequest: [fastify.optionalAuthenticate] },
+    storeController.list.bind(storeController),
+  );
 
   // ─── Slug-based lookup (must be before /:storeId) ─────────────────────────
-  fastify.get('/slug/:slug', { schema: getStoreBySlugSchema }, storeController.getBySlug.bind(storeController));
+  fastify.get(
+    '/slug/:slug',
+    { schema: getStoreBySlugSchema, onRequest: [fastify.optionalAuthenticate] },
+    storeController.getBySlug.bind(storeController) as any,
+  );
 
   // ─── Vendor-only: own store management (must be before /:storeId) ────────────
   fastify.get(

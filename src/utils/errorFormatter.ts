@@ -1,6 +1,7 @@
 import { FastifyReply, FastifyRequest } from 'fastify';
 
 import { AppError } from './appError';
+import { isUniqueConstraintError, mapUniqueConstraintViolation } from './sequelizeUniqueConstraint';
 
 // ─── Error Shape Interfaces ───────────────────────────────────────────────────
 
@@ -161,6 +162,17 @@ export const formatError = (
     message = appErr.message ?? message;
     if (appErr.details !== undefined) {
       details = appErr.details;
+    }
+  }
+
+  // ── 2b. Sequelize unique constraint (duplicate email, slug, etc.) ───────────
+  else if (isUniqueConstraintError(error)) {
+    statusCode = 409;
+    const mapped = mapUniqueConstraintViolation(error);
+    code = mapped.code;
+    message = mapped.message;
+    if (mapped.field) {
+      details = { field: mapped.field };
     }
   }
 

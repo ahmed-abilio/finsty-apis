@@ -23,6 +23,16 @@ export interface VendorListOrdersQuery extends ListOrdersQuery {
   to?: string;
 }
 
+export interface AdminListOrdersQuery extends ListOrdersQuery {
+  userId?: string;
+  storeId?: string;
+  search?: string;
+  email?: string;
+  from?: string;
+  to?: string;
+  deliveryType?: 'delivery' | 'pickup';
+}
+
 interface UpdateStatusBody {
   status: string;
 }
@@ -165,6 +175,25 @@ class OrderController {
     reply: FastifyReply,
   ): Promise<void> {
     const order = await orderService.updateStatus(request.params.orderId, request.body.status);
+    void reply.status(200).send({ success: true, data: { order } });
+  }
+
+  async adminList(
+    request: FastifyRequest<{ Querystring: AdminListOrdersQuery }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const result = await orderService.listForAdmin({
+      ...request.query,
+      status: request.query.status as import('./order.model').OrderStatus | undefined,
+    });
+    void reply.status(200).send({ success: true, data: result });
+  }
+
+  async adminGetOne(
+    request: FastifyRequest<{ Params: OrderParams }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const order = await orderService.getByIdForAdmin(request.params.orderId);
     void reply.status(200).send({ success: true, data: { order } });
   }
 

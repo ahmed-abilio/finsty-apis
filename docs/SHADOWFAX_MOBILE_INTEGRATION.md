@@ -684,11 +684,92 @@ Run API and open `{API_HOST}/docs` — filter tags **Orders**, **Cart**, **Shado
 
 ---
 
+## 11. Post-delivery returns (within 1 hour)
+
+Buyers can request a **full or partial return** on **delivery** orders within **1 hour** of `order.deliveredAt`. Finsty schedules a **reverse Shadowfax pickup** (customer address → store). The vendor inspects the product at the store, then approves or rejects the refund.
+
+### Eligibility (customer app)
+
+Show **Return** only when:
+
+- `order.deliveryType === 'delivery'`
+- `order.status === 'delivered'`
+- `now - order.deliveredAt < 1 hour`
+
+### Create return (partial line items supported)
+
+`POST /api/v1/orders/:orderId/returns`
+
+```json
+{
+  "items": [
+    { "orderItemId": "uuid-of-line-item", "quantity": 1 }
+  ],
+  "reason": "Wrong size"
+}
+```
+
+Response `201` includes `data.return` with `id`, `status`, `items[]`, and Shadowfax fields once placed.
+
+| Return `status` | Meaning |
+|-----------------|--------|
+| `requested` | Created; Shadowfax placement queued |
+| `pickup_scheduled` | Reverse pickup placed |
+| `rider_assigned` … `arrived` | Same logistics stepper as forward delivery |
+| `pending_inspection` | Product received at store — vendor must inspect |
+| `refund_approved` | Wallet credited (line-item amounts only) |
+| `refund_rejected` | Vendor rejected after inspection |
+
+Parent `order.status` stays `delivered` during partial returns.
+
+### Track return pickup
+
+`GET /api/v1/orders/:orderId/returns/:returnId/delivery-status`
+
+Same response shape as forward `GET /orders/:orderId/delivery-status`. Poll with backoff; handle `409 SHADOWFAX_RETURN_NOT_PLACED` while placement runs.
+
+Use `data.return.logisticsStatus` / `data.return.status` from `GET .../returns/:returnId` for the stepper UI.
+
+### Vendor inspection & refund
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/orders/vendor/returns?status=pending_inspection` | List returns awaiting inspection |
+| `POST` | `/orders/vendor/returns/:returnId/approve` | Approve + credit buyer wallet |
+| `POST` | `/orders/vendor/returns/:returnId/reject` | Reject with optional `{ "reason": "..." }` |
+
+Refund amount = **sum of `unitPrice × returnedQty`** per line (no delivery/tax/fees).
+
+### Return error codes
+
+| Code | Action |
+|------|--------|
+| `RETURN_WINDOW_EXPIRED` | Hide return CTA |
+| `RETURN_NOT_ELIGIBLE` | Order not delivered or not delivery type |
+| `RETURN_QUANTITY_EXCEEDED` | Reduce quantity |
+| `RETURN_ALREADY_IN_PROGRESS` | Show existing return status |
+| `RETURN_NOT_READY_FOR_INSPECTION` | Vendor acted too early |
+| `SHADOWFAX_RETURN_NOT_PLACED` | Retry delivery-status shortly |
+
+### Push notifications
+
+| Type | Recipient |
+|------|-----------|
+| `RETURN_REQUESTED` | Buyer |
+| `VENDOR_RETURN_RECEIVED` | Vendor (`pending_inspection`) |
+| `RETURN_REFUND_APPROVED` | Buyer |
+| `RETURN_REFUND_REJECTED` | Buyer |
+
+---
+
 ## Related backend files
 
 | Area | Path |
 |------|------|
 | Order routes | `src/modules/order/order.routes.ts` |
+| Order returns | `src/modules/order/orderReturn.service.ts` |
+| Return delivery status | `src/modules/order/orderReturnDeliveryStatus.service.ts` |
+| Return Shadowfax placement | `src/modules/shadowfax/shadowfaxReturnPlacement.service.ts` |
 | Delivery status service | `src/modules/order/orderDeliveryStatus.service.ts` |
 | Shadowfax placement | `src/modules/shadowfax/shadowfaxPlacement.service.ts` |
 | Status mapper | `src/modules/shadowfax/tracking/shadowfax-status.mapper.ts` |

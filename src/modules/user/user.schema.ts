@@ -200,3 +200,41 @@ export const registerDeviceTokenSchema: FastifySchema = {
     },
   },
 };
+
+// ─── GET /users/admin-contact ─────────────────────────────────────────────────
+
+export const getAdminContactSchema: FastifySchema = {
+  tags: ['User'],
+  summary: 'Platform admin support contact',
+  description:
+    'Returns the email and phone number of the primary active admin account. ' +
+    'Available to any authenticated user (customer, vendor, or admin).',
+  security: [{ BearerAuth: [] }],
+  response: {
+    200: {
+      description: 'Admin support contact',
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            email: { type: 'string', nullable: true },
+            phone: { type: 'string', nullable: true },
+          },
+        },
+      },
+    },
+    401: {
+      description: 'Unauthorized',
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: {
+          type: 'object',
+          properties: { code: { type: 'string' }, message: { type: 'string' } },
+        },
+      },
+    },
+  },
+};

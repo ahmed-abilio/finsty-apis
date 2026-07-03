@@ -198,3 +198,30 @@ export async function ensureVariantSizeChartColumn(sequelize: any) {
     logger.error('Error while ensuring product_variants.size_chart column:', error);
   }
 }
+
+/**
+ * Ensures `sub_categories.can_return` exists in environments where
+ * model sync/migrations are not run automatically.
+ */
+export async function ensureSubCategoryCanReturnColumn(sequelize: any) {
+  try {
+    const [tableExists] = await sequelize.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'sub_categories'
+      );
+    `);
+
+    if (!tableExists[0].exists) return;
+
+    await sequelize.query(`
+      ALTER TABLE sub_categories
+      ADD COLUMN IF NOT EXISTS can_return BOOLEAN NOT NULL DEFAULT true;
+    `);
+
+    logger.info('Ensured sub_categories.can_return column');
+  } catch (error) {
+    logger.error('Error while ensuring sub_categories.can_return column:', error);
+  }
+}

@@ -28,6 +28,7 @@ import { stockStatusWhere } from '@modules/product/productStock.util';
 import type { DateRange } from './vendorDashboard.utils';
 import { formatVendorProduct, type ProductWithVendorAssocs } from './vendorProductFormat';
 import { notifyVendorStoreReviewResult } from '@modules/notification/notification.store';
+import { assertStoreEmailAvailable, throwIfUniqueConstraint } from '@utils/sequelizeUniqueConstraint';
 
 // IFSC: 4 uppercase letters + '0' + 6 alphanumeric chars (RBI standard)
 const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
@@ -43,6 +44,7 @@ export interface StoreSearchQuery {
   minRating?: number;
   search?: string;
   city?: string;
+  email?: string;
   isActive?: boolean | 'all';
   onboardingStatus?: string;
   page?: number;
@@ -82,6 +84,28 @@ export interface VendorProductQuery {
   search?: string;
   page?: number;
   limit?: number;
+}
+
+export interface StoreOwnerSummary {
+  id: string;
+  name: string | null;
+  email: string | null;
+  phone: string | null;
+  role: string;
+  isActive: boolean;
+  profileImage: string | null;
+}
+
+function formatStoreOwnerSummary(user: User): StoreOwnerSummary {
+  return {
+    id: user.id,
+    name: user.name ?? null,
+    email: user.email ?? null,
+    phone: user.phone ?? null,
+    role: String(user.role),
+    isActive: user.isActive,
+    profileImage: user.profileImage ?? null,
+  };
 }
 
 class StoreService {
@@ -124,13 +148,21 @@ class StoreService {
 
     // 6. Create store in PENDING state — role stays USER until approval
     const slug = await generateUniqueSlug(data.name, Store);
-    const store = await Store.create({
-      ...data,
-      slug,
-      isActive: false,
-      isVerified: false,
-      onboardingStatus: 'PENDING',
-    } as StoreCreationAttributes);
+    await assertStoreEmailAvailable(email);
+
+    let store: Store;
+    try {
+      store = await Store.create({
+        ...data,
+        slug,
+        isActive: false,
+        isVerified: false,
+        onboardingStatus: 'PENDING',
+      } as StoreCreationAttributes);
+    } catch (err) {
+      throwIfUniqueConstraint(err);
+      throw err;
+    }
 
     console.log(`[StoreService] Successfully created store for owner ${ownerId}. Store ID: ${store.id}`);
 
@@ -196,7 +228,7 @@ class StoreService {
 
   // ─── Search ──────────────────────────────────────────────────────────────────
 
-  async search(query: StoreSearchQuery) {
+  async search(query: StoreSearchQuery, options?: { includeOwner?: boolean }) {
     const {
       lat,
       lng,
@@ -206,6 +238,7 @@ class StoreService {
       minRating,
       search,
       city,
+      email,
       isActive,
       onboardingStatus,
       page = 1,
@@ -256,6 +289,10 @@ class StoreService {
       (where as Record<string, unknown>)['city'] = { [Op.iLike]: `%${city}%` };
     }
 
+    if (email?.trim()) {
+      (where as Record<string, unknown>)['email'] = { [Op.iLike]: `%${email.trim()}%` };
+    }
+
     let distanceLiteral: ReturnType<typeof literal> | null = null;
     let havingClause: ReturnType<typeof literal> | null = null;
 
@@ -295,11 +332,51 @@ class StoreService {
     const { count, rows } = await Store.findAndCountAll(findOptions as any);
 
     return {
-      stores: rows.map((s) => s.toPublicJSON()),
+      stores: await this.formatStoresForResponse(rows, options?.includeOwner),
       total: Array.isArray(count) ? count.length : count,
       page,
       limit,
     };
+  }
+
+  async formatStoreForResponse(
+    store: Store,
+    includeOwner = false,
+  ): Promise<Record<string, unknown>> {
+    const json = store.toPublicJSON();
+    if (!includeOwner || !store.ownerId) return json;
+
+    const owner = await userService.findStoreOwnerById(store.ownerId);
+    return {
+      ...json,
+      owner: owner ? formatStoreOwnerSummary(owner) : null,
+    };
+  }
+
+  async formatStoresForResponse(
+    stores: Store[],
+    includeOwner = false,
+  ): Promise<Record<string, unknown>[]> {
+    if (!includeOwner) {
+      return stores.map((s) => s.toPublicJSON());
+    }
+
+    const ownerIds = [
+      ...new Set(stores.map((s) => s.ownerId).filter((id): id is string => Boolean(id))),
+    ];
+    const ownerById = new Map<string, StoreOwnerSummary>();
+
+    await Promise.all(
+      ownerIds.map(async (ownerId) => {
+        const owner = await userService.findStoreOwnerById(ownerId);
+        if (owner) ownerById.set(ownerId, formatStoreOwnerSummary(owner));
+      }),
+    );
+
+    return stores.map((store) => ({
+      ...store.toPublicJSON(),
+      owner: store.ownerId ? ownerById.get(store.ownerId) ?? null : null,
+    }));
   }
 
   async update(storeId: string, data: Partial<StoreAttributes>): Promise<Store> {
@@ -314,7 +391,15 @@ class StoreService {
         'STORE_NOT_APPROVED',
       );
     }
-    return store.update(data);
+    if (data.email !== undefined) {
+      await assertStoreEmailAvailable(data.email, storeId);
+    }
+    try {
+      return await store.update(data);
+    } catch (err) {
+      throwIfUniqueConstraint(err);
+      throw err;
+    }
   }
 
   async delete(storeId: string): Promise<void> {
@@ -323,11 +408,40 @@ class StoreService {
     await store.destroy();
   }
 
-  async findBySlug(slug: string): Promise<Store> {
-    const where: any = { slug, isActive: true };
+  async findBySlug(
+    slug: string,
+    options?: { includeInactive?: boolean; isActiveFilter?: boolean },
+  ): Promise<Store> {
+    const where: Record<string, unknown> = { slug };
+    if (options?.isActiveFilter !== undefined) {
+      where.isActive = options.isActiveFilter;
+    } else if (!options?.includeInactive) {
+      where.isActive = true;
+    }
     const store = await Store.findOne({ where });
     if (!store) throw AppError.notFound('Store not found', 'STORE_NOT_FOUND');
     return store;
+  }
+
+  async resolveStoreRef(
+    ref: string,
+    options?: { includeInactive?: boolean; isActiveFilter?: boolean },
+  ): Promise<Store> {
+    const trimmed = ref.trim();
+    if (!trimmed) {
+      throw AppError.badRequest('Store reference is required');
+    }
+
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        trimmed,
+      );
+
+    if (isUuid) {
+      return this.findById(trimmed, options?.includeInactive ?? false, options?.isActiveFilter);
+    }
+
+    return this.findBySlug(trimmed, options);
   }
 
   async findByOwnerId(ownerId: string): Promise<Store | null> {

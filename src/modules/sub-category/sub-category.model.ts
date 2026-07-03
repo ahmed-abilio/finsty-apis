@@ -8,12 +8,13 @@ export interface SubCategoryAttributes {
   name: string;
   description: string | null;
   isActive: boolean;
+  canReturn: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export interface SubCategoryCreationAttributes
-  extends Optional<SubCategoryAttributes, 'id' | 'description' | 'isActive'> {}
+  extends Optional<SubCategoryAttributes, 'id' | 'description' | 'isActive' | 'canReturn'> {}
 
 class SubCategory
   extends Model<SubCategoryAttributes, SubCategoryCreationAttributes>
@@ -24,6 +25,7 @@ class SubCategory
   declare name: string;
   declare description: string | null;
   declare isActive: boolean;
+  declare canReturn: boolean;
   declare public readonly createdAt: Date;
   declare public readonly updatedAt: Date;
 
@@ -35,6 +37,7 @@ class SubCategory
       name: this.name || raw.name || '',
       description: this.description ?? raw.description ?? null,
       isActive: this.isActive ?? raw.isActive ?? raw.is_active ?? true,
+      canReturn: this.canReturn ?? raw.canReturn ?? raw.can_return ?? true,
       createdAt:
         this.createdAt || raw.createdAt
           ? new Date(this.createdAt || raw.createdAt).toISOString()
@@ -73,6 +76,12 @@ SubCategory.init(
       allowNull: false,
       defaultValue: true,
       field: 'is_active',
+    },
+    canReturn: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: 'can_return',
     },
     createdAt: {
       type: DataTypes.DATE,
