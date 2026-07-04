@@ -9,14 +9,12 @@ WORKDIR /app
 COPY package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --include=dev
 
-# Give tsc enough heap headroom so it doesn't GC-thrash on small build hosts.
-ENV NODE_OPTIONS=--max-old-space-size=2048
-
-# Copy source and compile. Cache mount persists the incremental tsc build info
-# so repeat builds only recompile changed files.
-COPY tsconfig.json .
+# Transpile TS -> JS with swc (seconds), then rewrite path aliases with tsc-alias.
+# Type-checking is intentionally NOT run here (it is the slow part) — run
+# `npm run typecheck` in CI/dev instead so the deploy host does no type analysis.
+COPY tsconfig.json .swcrc ./
 COPY src ./src
-RUN --mount=type=cache,target=/app/.tscache npm run build
+RUN npm run build
 
 # Prune dev dependencies in place (sequelize-cli stays — production dependency).
 # `npm prune` reuses the existing node_modules instead of a full reinstall.
