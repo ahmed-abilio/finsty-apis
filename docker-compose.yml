@@ -1,14 +1,9 @@
-# EC2 / production:
-#   export DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
-#   docker compose up -d --build
-#
+# EC2 / production:  docker compose up -d --build
 # Local dev (optional): docker compose -f docker-compose.dev.yml up --build
 #
 # Before first run on server:
 #   cp .env.production.example .env
 #   # add firebase-service-account.json (not in git)
-#
-# Faster rebuilds: BuildKit caches npm downloads and tsc incremental state between builds.
 
 services:
   app:
@@ -16,7 +11,6 @@ services:
       context: .
       dockerfile: Dockerfile
       target: runner
-      # Bake warning on EC2 without buildx is harmless; install docker-buildx-plugin if desired.
     image: finsty-apis:local
     pull_policy: never
     container_name: finsty-app
@@ -106,6 +100,10 @@ services:
   migrate:
     image: finsty-apis:local
     pull_policy: never
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runner
     env_file:
       - .env
     environment:

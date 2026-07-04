@@ -1,23 +1,25 @@
-# syntax=docker/dockerfile:1.4
-# Requires BuildKit (DOCKER_BUILDKIT=1). On EC2: export DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
-#
+# syntax=docker/dockerfile:1.7
 # ─── Stage 1: Builder ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies first (layer cache + npm download cache)
+# Install dependencies first (layer cache). The BuildKit cache mount keeps the
+# npm download cache across builds so re-installs don't re-fetch every tarball.
 COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm \
-    npm ci --include=dev
+RUN --mount=type=cache,target=/root/.npm npm ci --include=dev
 
-# Copy source and compile (production build: no .d.ts / source maps — much faster on small EC2)
-COPY tsconfig.json tsconfig.build.json ./
+# Give tsc enough heap headroom so it doesn't GC-thrash on small build hosts.
+ENV NODE_OPTIONS=--max-old-space-size=2048
+
+# Copy source and compile. Cache mount persists the incremental tsc build info
+# so repeat builds only recompile changed files.
+COPY tsconfig.json .
 COPY src ./src
-RUN --mount=type=cache,target=/app/.cache \
-    npm run build:docker
+RUN --mount=type=cache,target=/app/.tscache npm run build
 
-# Drop devDependencies without reinstalling node_modules (~1–2 min saved vs npm ci --omit=dev)
+# Prune dev dependencies in place (sequelize-cli stays — production dependency).
+# `npm prune` reuses the existing node_modules instead of a full reinstall.
 RUN npm prune --omit=dev && npm cache clean --force
 
 # ─── Stage 2: Runner ──────────────────────────────────────────────────────────

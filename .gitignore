@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.tscache/
 .env
 *.env.local
 firebase-service-account.json
