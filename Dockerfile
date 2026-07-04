@@ -1,58 +1,40 @@
-# syntax=docker/dockerfile:1.7
-# ─── Stage 1: Builder ─────────────────────────────────────────────────────────
+# ─── Stage 1: Build ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies first (layer cache). The BuildKit cache mount keeps the
-# npm download cache across builds so re-installs don't re-fetch every tarball.
+# Install all deps (including dev) needed to compile TypeScript with swc + tsc-alias
 COPY package*.json ./
-RUN --mount=type=cache,target=/root/.npm npm ci --include=dev
+RUN npm ci
 
-# Transpile TS -> JS with swc (seconds), then rewrite path aliases with tsc-alias.
-# Type-checking is intentionally NOT run here (it is the slow part) — run
-# `npm run typecheck` in CI/dev instead so the deploy host does no type analysis.
+# Copy source and build config, then compile to dist/
 COPY tsconfig.json .swcrc ./
 COPY src ./src
 RUN npm run build
 
-# Prune dev dependencies in place (sequelize-cli stays — production dependency).
-# `npm prune` reuses the existing node_modules instead of a full reinstall.
-RUN npm prune --omit=dev && npm cache clean --force
-
-# ─── Stage 2: Runner ──────────────────────────────────────────────────────────
+# ─── Stage 2: Runtime ───────────────────────────────────────────────────────
 FROM node:20-alpine AS runner
+
+ENV NODE_ENV=production
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-ENV HOST=0.0.0.0
-ENV PORT=3000
+# Only production dependencies (sequelize-cli is a runtime dep, so migrations work)
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-# Create non-root user
-RUN addgroup -g 1001 -S nodejs && adduser -S fastify -u 1001
+# Compiled application
+COPY --from=builder /app/dist ./dist
 
-# Copy only what is needed
-COPY --from=builder --chown=fastify:nodejs /app/dist ./dist
-COPY --from=builder --chown=fastify:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=fastify:nodejs /app/package.json ./package.json
-COPY --chown=fastify:nodejs migrations ./migrations
-COPY --chown=fastify:nodejs .sequelizerc ./
-COPY --chown=fastify:nodejs src/config/sequelize-cli.js ./src/config/sequelize-cli.js
-COPY --chown=fastify:nodejs scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
-COPY --chown=fastify:nodejs scripts/bootstrap-schema.js ./scripts/bootstrap-schema.js
-COPY --chown=fastify:nodejs scripts/migration-helpers.js ./scripts/migration-helpers.js
+# Files needed for `sequelize-cli db:migrate` at container start
+COPY .sequelizerc ./
+COPY migrations ./migrations
+COPY src/config/sequelize-cli.js ./src/config/sequelize-cli.js
 
-# Copy the Firebase service account JSON at runtime via docker-compose volume mount.
-# Do not bake credentials into the image.
-
-RUN chmod +x ./scripts/docker-entrypoint.sh
-
-USER fastify
+# Startup script (runs migrations, then boots the server)
+COPY docker-entrypoint.sh ./
+RUN chmod +x docker-entrypoint.sh
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD node -e "const p=process.env.PORT||3000; require('http').get('http://127.0.0.1:'+p+'/health', r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
-
-ENTRYPOINT ["./scripts/docker-entrypoint.sh"]
+ENTRYPOINT ["./docker-entrypoint.sh"]
