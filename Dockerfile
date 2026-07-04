@@ -1,19 +1,24 @@
+# syntax=docker/dockerfile:1.4
+# Requires BuildKit (DOCKER_BUILDKIT=1). On EC2: export DOCKER_BUILDKIT=1 COMPOSE_DOCKER_CLI_BUILD=1
+#
 # ─── Stage 1: Builder ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install dependencies first (layer cache)
+# Install dependencies first (layer cache + npm download cache)
 COPY package*.json ./
-RUN npm ci --include=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --include=dev
 
-# Copy source and compile
-COPY tsconfig.json .
+# Copy source and compile (production build: no .d.ts / source maps — much faster on small EC2)
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
-RUN npm run build
+RUN --mount=type=cache,target=/app/.cache \
+    npm run build:docker
 
-# Prune dev dependencies (sequelize-cli stays — production dependency)
-RUN npm ci --omit=dev && npm cache clean --force
+# Drop devDependencies without reinstalling node_modules (~1–2 min saved vs npm ci --omit=dev)
+RUN npm prune --omit=dev && npm cache clean --force
 
 # ─── Stage 2: Runner ──────────────────────────────────────────────────────────
 FROM node:20-alpine AS runner
