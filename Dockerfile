@@ -1,27 +1,32 @@
+# syntax=docker/dockerfile:1.7
 # ─── Stage 1: Build ─────────────────────────────────────────────────────────
 FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-# Install all deps (including dev) needed to compile TypeScript with swc + tsc-alias
+# Install ALL deps (dev included) to compile TS. Cache mount keeps the npm
+# download cache warm across builds so re-installs are near-instant.
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
-# Copy source and build config, then compile to dist/
+# Compile to dist/
 COPY tsconfig.json .swcrc ./
 COPY src ./src
 RUN npm run build
+
+# Strip dev dependencies in place so we can reuse this node_modules in runtime
+# (avoids a second full npm install). sequelize-cli is a prod dep, so it stays.
+RUN npm prune --omit=dev
 
 # ─── Stage 2: Runtime ───────────────────────────────────────────────────────
 FROM node:20-alpine AS runner
 
 ENV NODE_ENV=production
-
 WORKDIR /app
 
-# Only production dependencies (sequelize-cli is a runtime dep, so migrations work)
+# Reuse the already-installed, pruned production node_modules from the builder
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+COPY --from=builder /app/node_modules ./node_modules
 
 # Compiled application
 COPY --from=builder /app/dist ./dist
