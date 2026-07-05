@@ -14,13 +14,12 @@ services:
 
   api:
     build:
-      context: ./finsty-apis
+      context: .
     container_name: finsty-api
     restart: unless-stopped
     env_file:
-      - ./finsty-apis/.env
+      - .env
     environment:
-      # Container-level overrides so the app binds correctly and talks to the redis service
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: "3000"
@@ -30,25 +29,10 @@ services:
     ports:
       - "3000:3000"
     volumes:
-      # Mount Firebase credentials at the path referenced by FIREBASE_SERVICE_ACCOUNT_PATH
-      - ./finsty-apis/firebase-service-account.json:/app/firebase-service-account.json:ro
+      - ./firebase-service-account.json:/app/firebase-service-account.json:ro
     depends_on:
       redis:
         condition: service_healthy
-
-  frontend:
-    build:
-      context: ./finsty-admin-fe
-      args:
-        # Point the admin UI at this EC2 host's API. Override for your public IP/domain.
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3000/api/v1}
-        VITE_APP_NAME: ${VITE_APP_NAME:-Finsty Admin}
-    container_name: finsty-frontend
-    restart: unless-stopped
-    ports:
-      - "80:80"
-    depends_on:
-      - api
 
 volumes:
   redis-data:
