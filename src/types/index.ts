@@ -14,11 +14,15 @@ export type OrderStatus =
   | 'returned';
 export type DeliveryType = 'delivery' | 'pickup';
 
+export type TokenType = 'access' | 'refresh';
+
 export interface JwtPayload {
   sub: string;       // userId (UUID)
   uid: string;       // stable user identifier (phone for phone auth; firebaseUid for google/apple)
   provider: AuthProvider;
   role: string;
+  sid: string;       // session id — ties the token to the single active session in Redis
+  type?: TokenType;  // distinguishes access vs refresh tokens (set at sign time)
   iat?: number;
   exp?: number;
 }

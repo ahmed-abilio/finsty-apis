@@ -11,6 +11,7 @@ import Coupon, {
 } from './coupon.model';
 import CouponUsage from './coupon-usage.model';
 import { AppError } from '@utils/appError';
+import { assertValidCouponCode } from '@utils/couponCodeValidation';
 import { Roles } from '@modules/user/user.model';
 import { computeMoneyDiscount, stackMoneyDiscounts } from './couponStackMath';
 import { notifyAdminsNewCouponApplication, notifyVendorCouponApproved } from '@modules/notification/notification.coupon';
@@ -57,6 +58,57 @@ export interface AppliedDiscount {
 
 export type { VendorCouponStats };
 
+function validationError(field: string, message: string, code: string): AppError {
+  return AppError.badRequest(message, code, { field });
+}
+
+function assertFiniteNumber(
+  value: number | null | undefined,
+  field: string,
+  message: string,
+  code: string,
+): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isFinite(value)) throw validationError(field, message, code);
+  return value;
+}
+
+function assertNonNegativeNumber(
+  value: number | null | undefined,
+  field: string,
+  message: string,
+  code: string,
+): number | undefined {
+  const parsed = assertFiniteNumber(value, field, message, code);
+  if (parsed === undefined) return undefined;
+  if (parsed < 0) throw validationError(field, message, code);
+  return parsed;
+}
+
+function assertPositiveInteger(
+  value: number | null | undefined,
+  field: string,
+  message: string,
+  code: string,
+): number | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isInteger(value) || value <= 0) throw validationError(field, message, code);
+  return value;
+}
+
+function parseCouponDate(value: string, field: string): Date {
+  // Accept strict ISO datetime only (e.g. 2026-07-07T10:30:00.000Z)
+  const isoDateTimePattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+  if (!isoDateTimePattern.test(value)) {
+    throw validationError(field, `Invalid ${field === 'validFrom' ? 'start' : 'end'} date`, 'INVALID_COUPON_DATE');
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw validationError(field, `Invalid ${field === 'validFrom' ? 'start' : 'end'} date`, 'INVALID_COUPON_DATE');
+  }
+  return date;
+}
+
 class CouponService {
   // ─── Create ───────────────────────────────────────────────────────────────────
 
@@ -77,15 +129,85 @@ class CouponService {
       input.storeId = creatorStoreId;
     }
 
-    const existing = await Coupon.findOne({ where: { code: input.code.toUpperCase() } });
+    try {
+      input.code = assertValidCouponCode(input.code);
+    } catch (err) {
+      throw validationError('code', (err as Error).message, 'INVALID_COUPON_CODE');
+    }
+
+    const existing = await Coupon.findOne({ where: { code: input.code } });
     if (existing) throw AppError.conflict('Coupon code already exists', 'COUPON_CODE_EXISTS');
 
-    if (input.type === 'PERCENTAGE' && ((input.value ?? 0) <= 0 || (input.value ?? 0) > 100)) {
-      throw AppError.badRequest('Percentage value must be between 1 and 100', 'INVALID_COUPON_VALUE');
+    const value = assertFiniteNumber(
+      input.value ?? 0,
+      'value',
+      'Enter a valid discount value',
+      'INVALID_COUPON_VALUE',
+    ) ?? 0;
+    if (input.type !== 'FREE_DELIVERY' && value <= 0) {
+      throw validationError('value', 'Discount value must be greater than 0', 'INVALID_COUPON_VALUE');
+    }
+    if (input.type === 'PERCENTAGE' && (value <= 0 || value > 100)) {
+      throw validationError('value', 'Percentage value must be between 1 and 100', 'INVALID_COUPON_VALUE');
+    }
+    const minOrderValue = assertNonNegativeNumber(
+      input.minOrderValue ?? 0,
+      'minOrderValue',
+      'Enter a valid minimum order value',
+      'INVALID_MIN_ORDER_VALUE',
+    ) ?? 0;
+    const maxDiscountCap = assertNonNegativeNumber(
+      input.maxDiscountCap,
+      'maxDiscountCap',
+      'Enter a valid max discount cap',
+      'INVALID_MAX_DISCOUNT_CAP',
+    ) ?? null;
+    const usageLimitTotal = assertPositiveInteger(
+      input.usageLimitTotal,
+      'usageLimitTotal',
+      'Total usage limit must be a whole number greater than 0',
+      'INVALID_USAGE_LIMIT_TOTAL',
+    );
+    const usageLimitPerUser = assertPositiveInteger(
+      input.usageLimitPerUser,
+      'usageLimitPerUser',
+      'Per-user limit must be a whole number greater than 0',
+      'INVALID_USAGE_LIMIT_PER_USER',
+    );
+    if (
+      usageLimitTotal !== null &&
+      usageLimitPerUser !== null &&
+      usageLimitPerUser > usageLimitTotal
+    ) {
+      throw validationError(
+        'usageLimitPerUser',
+        'Per-user limit cannot exceed total usage limit',
+        'INVALID_USAGE_LIMIT_PER_USER',
+      );
+    }
+    const validFrom = parseCouponDate(input.validFrom, 'validFrom');
+    const validTo = parseCouponDate(input.validTo, 'validTo');
+    if (validTo <= validFrom) {
+      throw validationError('validTo', 'End date must be after start date', 'INVALID_COUPON_DATE_RANGE');
     }
 
     // Validate scoped targeting arrays are provided when required
     const appliesTo = input.appliesTo ?? 'all_products';
+    const minimumRequirement = input.minimumRequirement ?? 'none';
+    if (minimumRequirement === 'minimum_order_value' && minOrderValue <= 0) {
+      throw validationError(
+        'minOrderValue',
+        'Minimum order value must be greater than 0',
+        'INVALID_MIN_ORDER_VALUE',
+      );
+    }
+    if (minimumRequirement === 'minimum_quantity' && (!Number.isInteger(minOrderValue) || minOrderValue <= 0)) {
+      throw validationError(
+        'minOrderValue',
+        'Minimum quantity must be a whole number greater than 0',
+        'INVALID_MIN_QUANTITY',
+      );
+    }
     if (appliesTo === 'specific_products') {
       if (!input.productIds?.length) {
         throw AppError.badRequest(
@@ -121,15 +243,15 @@ class CouponService {
     const isApproved = creatorRole === Roles.ADMIN;
 
     const coupon = await Coupon.create({
-      code: input.code.toUpperCase(),
+      code: input.code,
       type: input.type,
-      value: input.value ?? 0,
-      minOrderValue: input.minOrderValue ?? 0,
-      maxDiscountCap: input.maxDiscountCap ?? null,
-      validFrom: new Date(input.validFrom),
-      validTo: new Date(input.validTo),
-      usageLimitTotal: input.usageLimitTotal ?? null,
-      usageLimitPerUser: input.usageLimitPerUser ?? null,
+      value: input.type === 'FREE_DELIVERY' ? 0 : value,
+      minOrderValue,
+      maxDiscountCap,
+      validFrom,
+      validTo,
+      usageLimitTotal,
+      usageLimitPerUser,
       isStackable: input.isStackable ?? false,
       isFirstOrderOnly,
       storeId: input.storeId ?? null,
@@ -137,7 +259,7 @@ class CouponService {
       isApproved,
       createdBy: creatorId,
       appliesTo,
-      minimumRequirement: input.minimumRequirement ?? 'none',
+      minimumRequirement,
       customerEligibility,
       productIds: appliesTo === 'specific_products' ? (input.productIds ?? null) : null,
       categoryIds: appliesTo === 'specific_categories' ? (input.categoryIds ?? null) : null,
@@ -166,6 +288,23 @@ class CouponService {
     if (coupon.createdBy) {
       notifyVendorCouponApproved(coupon.createdBy, coupon);
     }
+
+    return coupon;
+  }
+
+  async reject(couponId: string): Promise<Coupon> {
+    const coupon = await Coupon.findByPk(couponId);
+    if (!coupon) throw AppError.notFound('Coupon not found', 'COUPON_NOT_FOUND');
+    if (coupon.isApproved) {
+      throw AppError.badRequest('Approved coupon cannot be rejected', 'CANNOT_REJECT_APPROVED_COUPON');
+    }
+    // Idempotent reject: if already rejected, return current state.
+    if (!coupon.isActive) return coupon;
+
+    await coupon.update({
+      isApproved: false,
+      isActive: false,
+    });
 
     return coupon;
   }
@@ -289,7 +428,6 @@ class CouponService {
 
     if (!coupon.isApproved) fail('Coupon is not yet approved', 'COUPON_NOT_APPROVED');
     if (!coupon.isActive) fail('Coupon is currently inactive', 'COUPON_INACTIVE');
-    if (!coupon.readyToUse) fail('Coupon is not yet available for use', 'COUPON_NOT_READY');
 
     if (now < coupon.validFrom || now > coupon.validTo) {
       fail('Coupon has expired or is not yet active', 'COUPON_EXPIRED');
@@ -389,7 +527,6 @@ class CouponService {
       where: {
         isApproved: true,
         isActive: true,
-        readyToUse: true,
         validFrom: { [Op.lte]: now },
         validTo: { [Op.gte]: now },
         minOrderValue: { [Op.lte]: ctx.subtotal },
@@ -472,10 +609,9 @@ class CouponService {
     };
   }
 
-  async toggleReadyToUse(couponId: string): Promise<Coupon> {
+  async getById(couponId: string): Promise<Coupon> {
     const coupon = await Coupon.findByPk(couponId);
     if (!coupon) throw AppError.notFound('Coupon not found', 'COUPON_NOT_FOUND');
-    await coupon.update({ readyToUse: !coupon.readyToUse });
     return coupon;
   }
 
@@ -485,7 +621,6 @@ class CouponService {
       includeGlobal?: boolean;
       isApproved?: boolean;
       isActive?: boolean;
-      readyToUse?: boolean;
       userId?: string;
       page?: number;
       limit?: number;
@@ -527,7 +662,6 @@ class CouponService {
       ...storeScope,
       ...(filters.isApproved !== undefined ? { isApproved: filters.isApproved } : {}),
       ...(filters.isActive !== undefined ? { isActive: filters.isActive } : {}),
-      ...(filters.readyToUse !== undefined ? { readyToUse: filters.readyToUse } : {}),
       ...(userAndConditions.length > 0 ? { [Op.and]: userAndConditions } : {}),
     };
 

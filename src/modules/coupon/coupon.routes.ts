@@ -3,13 +3,14 @@ import couponController from './coupon.controller';
 import {
   createCouponSchema,
   approveCouponSchema,
+  rejectCouponSchema,
   toggleCouponSchema,
   validateCouponSchema,
   listCouponsSchema,
   adminListCouponsSchema,
+  adminGetCouponSchema,
   vendorListCouponsSchema,
   vendorCouponStatsSchema,
-  toggleReadyToUseSchema,
 } from './coupon.schema';
 import { Roles } from '@modules/user/user.model';
 import type { CreateCouponInput } from './coupon.service';
@@ -73,6 +74,13 @@ export async function adminCouponRoutes(fastify: FastifyInstance): Promise<void>
   // GET /admin/coupons — list all coupons including unapproved
   fastify.get('/', { schema: adminListCouponsSchema }, couponController.adminList.bind(couponController));
 
+  // GET /admin/coupons/:couponId — coupon details
+  fastify.get(
+    '/:couponId',
+    { schema: adminGetCouponSchema },
+    couponController.getOne.bind(couponController),
+  );
+
   // POST /admin/coupons/:couponId/approve — approve a vendor coupon
   fastify.post(
     '/:couponId/approve',
@@ -80,17 +88,17 @@ export async function adminCouponRoutes(fastify: FastifyInstance): Promise<void>
     couponController.approve.bind(couponController),
   );
 
+  // POST /admin/coupons/:couponId/reject — reject a vendor coupon
+  fastify.post(
+    '/:couponId/reject',
+    { schema: rejectCouponSchema },
+    couponController.reject.bind(couponController),
+  );
+
   // PATCH /admin/coupons/:couponId/toggle — toggle active/inactive
   fastify.patch(
     '/:couponId/toggle',
     { schema: toggleCouponSchema },
     couponController.toggleActive.bind(couponController),
-  );
-
-  // PATCH /admin/coupons/:couponId/ready-to-use — toggle readyToUse flag
-  fastify.patch(
-    '/:couponId/ready-to-use',
-    { schema: toggleReadyToUseSchema },
-    couponController.toggleReadyToUse.bind(couponController),
   );
 }

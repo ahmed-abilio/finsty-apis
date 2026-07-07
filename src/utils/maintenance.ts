@@ -200,6 +200,51 @@ export async function ensureVariantSizeChartColumn(sequelize: any) {
 }
 
 /**
+ * Recomputes the cached `products.average_rating` / `products.review_count`
+ * from `product_reviews` for any product whose cached values have drifted.
+ *
+ * Historically the aggregate was recalculated on a separate connection outside
+ * the review-creation transaction, so a product's first review left the cache at
+ * 0 (and later reviews lagged by one). This one-shot backfill corrects those
+ * rows; it only touches products whose cached values disagree, so it is cheap
+ * and idempotent on every boot.
+ */
+export async function backfillProductRatings(sequelize: any) {
+  try {
+    const [reviewsTableExists] = await sequelize.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'product_reviews'
+      );
+    `);
+
+    if (!reviewsTableExists[0].exists) return;
+
+    const [, result]: any = await sequelize.query(`
+      UPDATE products p
+      SET review_count = COALESCE(sub.cnt, 0),
+          average_rating = COALESCE(sub.avg, 0)
+      FROM (
+        SELECT product_id, COUNT(*)::int AS cnt, ROUND(AVG(rating)::numeric, 2) AS avg
+        FROM product_reviews
+        WHERE is_approved = true
+        GROUP BY product_id
+      ) sub
+      WHERE p.id = sub.product_id
+        AND (p.review_count <> sub.cnt OR p.average_rating <> sub.avg);
+    `);
+
+    const rowCount = typeof result === 'number' ? result : (result?.rowCount ?? 0);
+    if (rowCount > 0) {
+      logger.info(`Backfilled cached rating aggregates for ${rowCount} product(s)`);
+    }
+  } catch (error) {
+    logger.error('Error while backfilling product ratings:', error);
+  }
+}
+
+/**
  * Ensures `sub_categories.can_return` exists in environments where
  * model sync/migrations are not run automatically.
  */

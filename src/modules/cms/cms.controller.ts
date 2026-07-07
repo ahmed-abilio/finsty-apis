@@ -12,7 +12,7 @@ class CmsController {
     request: FastifyRequest<{ Querystring: CmsReadFilters }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const role = (request.user.role as Roles) || Roles.USER;
+    const role = (request.user?.role as Roles | undefined) ?? Roles.USER;
     const rows = await cmsService.listPublished(request.query ?? {}, role);
     void reply.status(200).send({
       success: true,

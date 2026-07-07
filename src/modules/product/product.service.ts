@@ -908,7 +908,6 @@ class ProductService {
       include: includes,
     });
 
-    console.log(`DEBUG: findById(${productId}) - product found: ${!!product}, isActive: ${product?.isActive}`);
     if (!product) throw AppError.notFound('Product not found', 'PRODUCT_NOT_FOUND');
 
     type ColorWithAssocs = ProductColor & {

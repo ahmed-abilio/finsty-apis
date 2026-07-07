@@ -11,6 +11,7 @@ import {
   ensureOrderIdColumn,
   ensureVariantSizeChartColumn,
   ensureSubCategoryCanReturnColumn,
+  backfillProductRatings,
 } from '@utils/maintenance';
 import { scheduleOrderExpiryJob } from '@queues/orderExpiryQueue';
 import { scheduleShadowfaxReconciliationJob } from '@queues/shadowfaxReconciliationQueue';
@@ -33,6 +34,7 @@ async function start() {
     await ensureOrderIdColumn(sequelize);
     await ensureVariantSizeChartColumn(sequelize);
     await ensureSubCategoryCanReturnColumn(sequelize);
+    await backfillProductRatings(sequelize);
     await scheduleOrderExpiryJob();
     await scheduleShadowfaxReconciliationJob();
 

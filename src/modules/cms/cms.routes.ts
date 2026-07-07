@@ -8,7 +8,6 @@ import {
   updateCmsPageSchema,
   deleteCmsPageSchema,
 } from './cms.schema';
-import { Roles } from '@modules/user/user.model';
 import type { CreateCmsPageInput, UpdateCmsPageInput, CmsListFilters, CmsReadFilters } from './cms.types';
 
 interface CmsParams {
@@ -16,8 +15,6 @@ interface CmsParams {
 }
 
 export async function cmsRoutes(fastify: FastifyInstance): Promise<void> {
-  fastify.addHook('onRequest', fastify.authenticate);
-
   fastify.get<{ Querystring: CmsReadFilters }>(
     '/',
     { schema: listCmsPagesSchema },
@@ -26,9 +23,6 @@ export async function cmsRoutes(fastify: FastifyInstance): Promise<void> {
 }
 
 export async function adminCmsRoutes(fastify: FastifyInstance): Promise<void> {
-  fastify.addHook('onRequest', fastify.authenticate);
-  fastify.addHook('onRequest', fastify.requireRole(Roles.ADMIN));
-
   fastify.get<{ Querystring: CmsListFilters }>(
     '/',
     { schema: adminListCmsPagesSchema },

@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
+import { randomUUID } from 'crypto';
 import { DecodedIdToken } from 'firebase-admin/auth';
 import { firebaseAuth } from '@config/firebase';
+import redis from '@config/redis';
 import userService from '@modules/user/user.service';
 import { AppError } from '@utils/appError';
 import { AuthProvider, JwtPayload, TokenPair } from '@types-app/index';
@@ -14,6 +16,44 @@ const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN as string;
 
 if (!JWT_SECRET || !JWT_EXPIRES_IN || !REFRESH_TOKEN_EXPIRES_IN) {
   throw new Error('JWT_SECRET, JWT_EXPIRES_IN, and REFRESH_TOKEN_EXPIRES_IN environment variables are required');
+}
+
+// ─── Single-session store (Redis) ──────────────────────────────────────────────
+//
+// Exactly one active session is allowed per user. The current session id (sid) is
+// stored at `session:{role}:{userId}`; every issued JWT carries that sid. A new
+// login overwrites the value, so any previously issued token's sid stops matching
+// and is rejected as SESSION_REVOKED.
+
+/** Parse a jsonwebtoken-style duration (e.g. "45m", "7d") into whole seconds. */
+function parseDurationToSeconds(duration: string): number {
+  const match = /^(\d+)\s*([smhd])$/.exec(duration.trim());
+  if (!match) {
+    // Fall back to treating the value as raw seconds; default to 7 days.
+    const asNumber = parseInt(duration, 10);
+    return Number.isFinite(asNumber) && asNumber > 0 ? asNumber : 7 * 24 * 60 * 60;
+  }
+  const value = parseInt(match[1], 10);
+  const unitSeconds: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+  return value * unitSeconds[match[2]];
+}
+
+const SESSION_TTL_SECONDS = parseDurationToSeconds(REFRESH_TOKEN_EXPIRES_IN);
+
+function sessionKey(role: string, userId: string): string {
+  return `session:${role}:${userId}`;
+}
+
+export async function setActiveSession(role: string, userId: string, sid: string): Promise<void> {
+  await redis.set(sessionKey(role, userId), sid, 'EX', SESSION_TTL_SECONDS);
+}
+
+export async function getActiveSession(role: string, userId: string): Promise<string | null> {
+  return redis.get(sessionKey(role, userId));
+}
+
+export async function clearActiveSession(role: string, userId: string): Promise<void> {
+  await redis.del(sessionKey(role, userId));
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -156,7 +196,9 @@ export async function verifyOtp(
 // ─── JWT helpers ─────────────────────────────────────────────────────────────
 
 export function signAccessToken(payload: JwtPayload): string {
-  return jwt.sign(payload, JWT_SECRET as string, {
+  // `type` distinguishes this from a refresh token so the two are never
+  // identical and cannot be used interchangeably.
+  return jwt.sign({ ...payload, type: 'access' }, JWT_SECRET as string, {
     expiresIn: JWT_EXPIRES_IN,
     issuer: 'finsty-api',
     audience: 'finsty-client',
@@ -164,7 +206,7 @@ export function signAccessToken(payload: JwtPayload): string {
 }
 
 export function signRefreshToken(payload: JwtPayload): string {
-  return jwt.sign(payload, JWT_SECRET as string, {
+  return jwt.sign({ ...payload, type: 'refresh' }, JWT_SECRET as string, {
     expiresIn: REFRESH_TOKEN_EXPIRES_IN,
     issuer: 'finsty-api',
     audience: 'finsty-client',
@@ -173,39 +215,57 @@ export function signRefreshToken(payload: JwtPayload): string {
 
 export function verifyAccessToken(token: string): JwtPayload {
   try {
-    return jwt.verify(token, JWT_SECRET as string, {
+    const decoded = jwt.verify(token, JWT_SECRET as string, {
       issuer: 'finsty-api',
       audience: 'finsty-client',
     }) as JwtPayload;
-  } catch {
+    // Reject refresh tokens presented as access tokens.
+    if (decoded.type !== 'access') {
+      throw AppError.unauthorized('Access token is invalid or expired', 'INVALID_ACCESS_TOKEN');
+    }
+    return decoded;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
     throw AppError.unauthorized('Access token is invalid or expired', 'INVALID_ACCESS_TOKEN');
   }
 }
 
 export function verifyRefreshToken(token: string): JwtPayload {
   try {
-    return jwt.verify(token, JWT_SECRET as string, {
+    const decoded = jwt.verify(token, JWT_SECRET as string, {
       issuer: 'finsty-api',
       audience: 'finsty-client',
     }) as JwtPayload;
-  } catch {
+    // Reject access tokens presented as refresh tokens.
+    if (decoded.type !== 'refresh') {
+      throw AppError.unauthorized('Refresh token is invalid or expired', 'INVALID_REFRESH_TOKEN');
+    }
+    return decoded;
+  } catch (err) {
+    if (err instanceof AppError) throw err;
     throw AppError.unauthorized('Refresh token is invalid or expired', 'INVALID_REFRESH_TOKEN');
   }
 }
 
-export async function issueTokenPair(user: User): Promise<TokenPair> {
+export async function issueTokenPair(user: User, existingSessionId?: string): Promise<TokenPair> {
   const raw = (user as any).dataValues || {};
-  console.log('DEBUG: issueTokenPair raw dataValues:', JSON.stringify(raw, null, 2));
+
+  // Login (no existing sid) mints a fresh session and evicts the previous one.
+  // Refresh passes the validated sid so the same session continues (TTL reset).
+  const sid = existingSessionId ?? randomUUID();
 
   const payload: JwtPayload = {
     sub: user.id || raw.id || '',
     uid: user.firebaseUid || raw.firebaseUid || raw.firebase_uid || '',
     provider: user.provider || raw.provider || 'phone',
     role: user.role || raw.role || 'user',
+    sid,
   };
 
   const accessToken = signAccessToken(payload);
   const refreshToken = signRefreshToken(payload);
+
+  await setActiveSession(payload.role, payload.sub, sid);
 
   return { accessToken, refreshToken };
 }
@@ -301,6 +361,12 @@ export async function refreshAccessToken(
   const payload = verifyRefreshToken(refreshToken);
   const role = payload.role as Roles;
 
+  // 2. Ensure this refresh token belongs to the currently active session.
+  const activeSid = await getActiveSession(payload.role, payload.sub);
+  if (!activeSid || activeSid !== payload.sid) {
+    throw AppError.unauthorized('Session superseded by another login', 'SESSION_REVOKED');
+  }
+
   const user = await userService.findByIdForRole(payload.sub, {
     role,
   });
@@ -315,11 +381,23 @@ export async function refreshAccessToken(
     throw AppError.internal('Could not resolve user id from refresh token', 'REFRESH_FAILED');
   }
 
-  const tokens = await issueTokenPair(user);
+  // Reissue with the same sid so the session continues (and its TTL is refreshed).
+  const tokens = await issueTokenPair(user, payload.sid);
   return { tokens, userId, role };
 }
 
 // ─── Logout ───────────────────────────────────────────────────────────────────
 
-export async function logout(_refreshToken: string): Promise<void> {
+export async function logout(refreshToken: string): Promise<void> {
+  try {
+    const payload = verifyRefreshToken(refreshToken);
+    // Only clear if this token owns the active session, so a stale logout can't
+    // wipe a session created by a newer login.
+    const activeSid = await getActiveSession(payload.role, payload.sub);
+    if (activeSid && activeSid === payload.sid) {
+      await clearActiveSession(payload.role, payload.sub);
+    }
+  } catch {
+    // Invalid/expired refresh token — nothing to revoke.
+  }
 }

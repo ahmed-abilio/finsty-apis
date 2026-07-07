@@ -116,7 +116,8 @@ const storeObjectAdmin = {
     shopLicenseUrl: { type: ['string', 'null'] },
     panCardUrl: { type: ['string', 'null'] },
     aadharCardUrl: { type: ['string', 'null'] },
-    additionalDocuments: { type: 'array', items: { type: 'string' } },
+    gstDocument: { type: ['string', 'null'] },
+    storeImages: { type: 'array', items: { type: 'string' } },
     bankDetails: { ...bankDetailsObject, type: ['object', 'null'] },
     owner: { ...storeOwnerSummaryObject, type: ['object', 'null'] },
   },
@@ -490,10 +491,11 @@ export const createStoreSchema: FastifySchema = {
       shopLicenseUrl: { type: 'string', maxLength: 2048, description: 'S3 URL of shop/trade license' },
       panCardUrl: { type: 'string', maxLength: 2048, description: 'S3 URL of PAN card' },
       aadharCardUrl: { type: 'string', maxLength: 2048, description: 'S3 URL of Aadhar card' },
-      additionalDocuments: {
+      gstDocument: { type: 'string', maxLength: 2048, description: 'S3 URL of GST document' },
+      storeImages: {
         type: 'array',
         items: { type: 'string', maxLength: 2048 },
-        description: 'S3 URLs of any supplementary documents',
+        description: 'S3 URLs of store images',
       },
       // Bank details
       bankDetails: {

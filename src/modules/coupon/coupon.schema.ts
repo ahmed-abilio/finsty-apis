@@ -31,7 +31,6 @@ const couponObject = {
     categoryId: { type: 'string', nullable: true },
     isApproved: { type: 'boolean' },
     isActive: { type: 'boolean' },
-    readyToUse: { type: 'boolean' },
     createdBy: { type: 'string' },
     appliesTo: { type: 'string', enum: ['all_products', 'specific_products', 'specific_categories'] },
     minimumRequirement: { type: 'string', enum: ['none', 'minimum_order_value', 'minimum_quantity'] },
@@ -50,9 +49,10 @@ const createCouponBody = {
   properties: {
     code: {
       type: 'string',
-      minLength: 3,
-      maxLength: 50,
-      description: 'Unique coupon code (auto-uppercased)',
+      minLength: 1,
+      description:
+        'Unique coupon code. Leading/trailing spaces are trimmed; value is uppercased. ' +
+        'After normalization: 3–30 characters, A-Z, 0-9, underscore (_), hyphen (-) only.',
     },
     type: {
       type: 'string',
@@ -172,6 +172,34 @@ export const approveCouponSchema: FastifySchema = {
   tags: ['Coupons'],
   summary: 'Approve a vendor-created coupon (admin only)',
   description: 'Sets isApproved=true so the coupon becomes active for customers.',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['couponId'],
+    properties: { couponId: { type: 'string' } },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', properties: { coupon: couponObject } },
+      },
+    },
+    400: validationErrorResponse,
+    401: errorResponse,
+    403: errorResponse,
+    404: errorResponse,
+  },
+};
+
+// ─── POST /admin/coupons/:couponId/reject ──────────────────────────────────────
+
+export const rejectCouponSchema: FastifySchema = {
+  tags: ['Coupons'],
+  summary: 'Reject a vendor-created coupon (admin only)',
+  description:
+    'Marks coupon as rejected by forcing it inactive. Rejected coupons remain unapproved.',
   security: [{ BearerAuth: [] }],
   params: {
     type: 'object',
@@ -479,34 +507,6 @@ export const vendorCouponStatsSchema: FastifySchema = {
   },
 };
 
-// ─── PATCH /admin/coupons/:couponId/ready-to-use ──────────────────────────────
-
-export const toggleReadyToUseSchema: FastifySchema = {
-  tags: ['Coupons'],
-  summary: 'Toggle readyToUse flag for a coupon (admin only)',
-  description:
-    'Flips the readyToUse flag. Only coupons with readyToUse=true are visible to customers ' +
-    'in public lists and can be applied at checkout.',
-  security: [{ BearerAuth: [] }],
-  params: {
-    type: 'object',
-    required: ['couponId'],
-    properties: { couponId: { type: 'string' } },
-  },
-  response: {
-    200: {
-      type: 'object',
-      properties: {
-        success: { type: 'boolean' },
-        data: { type: 'object', properties: { coupon: couponObject } },
-      },
-    },
-    401: errorResponse,
-    403: errorResponse,
-    404: errorResponse,
-  },
-};
-
 // ─── GET /admin/coupons ────────────────────────────────────────────────────────
 
 export const adminListCouponsSchema: FastifySchema = {
@@ -548,5 +548,30 @@ export const adminListCouponsSchema: FastifySchema = {
     },
     401: errorResponse,
     403: errorResponse,
+  },
+};
+
+// ─── GET /admin/coupons/:couponId ──────────────────────────────────────────────
+
+export const adminGetCouponSchema: FastifySchema = {
+  tags: ['Coupons'],
+  summary: 'Get coupon details by id (admin only)',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['couponId'],
+    properties: { couponId: { type: 'string' } },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', properties: { coupon: couponObject } },
+      },
+    },
+    401: errorResponse,
+    403: errorResponse,
+    404: errorResponse,
   },
 };

@@ -1,4 +1,4 @@
-import { fn, col } from 'sequelize';
+import { fn, col, Transaction } from 'sequelize';
 import sequelize from '@config/database';
 import Product from '@modules/product/product.model';
 import ProductReview from '@modules/product/product-review.model';
@@ -36,7 +36,7 @@ export interface PaginatedReviews {
  * Recalculates averageRating and reviewCount for a product from the DB
  * and updates the product row in-place. Called after every review write.
  */
-async function recalculateRating(productId: string): Promise<void> {
+async function recalculateRating(productId: string, transaction?: Transaction): Promise<void> {
   const result = await ProductReview.findOne({
     where: { productId, isApproved: true },
     attributes: [
@@ -44,6 +44,7 @@ async function recalculateRating(productId: string): Promise<void> {
       [fn('AVG', col('rating')), 'avg'],
     ],
     raw: true,
+    transaction,
   }) as any;
 
   const reviewCount = Number(result?.count ?? 0);
@@ -51,7 +52,7 @@ async function recalculateRating(productId: string): Promise<void> {
     ? parseFloat(Number(result?.avg ?? 0).toFixed(2))
     : 0;
 
-  await Product.update({ reviewCount, averageRating }, { where: { id: productId } });
+  await Product.update({ reviewCount, averageRating }, { where: { id: productId }, transaction });
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -93,8 +94,10 @@ class ReviewService {
         reviewImages.push(...created);
       }
 
-      // Update cached aggregate on product
-      await recalculateRating(productId);
+      // Update cached aggregate on product — pass the transaction so the
+      // aggregate query sees the just-created review (otherwise it reads a
+      // separate connection and computes a stale/zero rating).
+      await recalculateRating(productId, t);
 
       return {
         ...review.toPublicJSON(),

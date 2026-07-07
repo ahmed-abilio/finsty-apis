@@ -83,11 +83,10 @@ const cmsParams = {
 
 export const listCmsPagesSchema: FastifySchema = {
   tags: ['CMS'],
-  summary: 'List published CMS pages (authenticated)',
+  summary: 'List published CMS pages (public)',
   description:
     'Returns published pages for the given audience. Filter by `slug` and/or `type` (`user`, `vendor`, `admin`, `all`). ' +
-    'If `type` is omitted, uses the JWT role. Rows with `audienceType=all` are included.',
-  security: [{ BearerAuth: [] }],
+    'If `type` is omitted, defaults to `user`. Rows with `audienceType=all` are included.',
   querystring: cmsReadQuery,
   response: {
     200: {
@@ -102,7 +101,6 @@ export const listCmsPagesSchema: FastifySchema = {
         },
       },
     },
-    401: errorResponse,
   },
 };
 
@@ -110,8 +108,7 @@ export const listCmsPagesSchema: FastifySchema = {
 
 export const adminListCmsPagesSchema: FastifySchema = {
   tags: ['Admin CMS'],
-  summary: 'List all CMS pages (admin)',
-  security: [{ BearerAuth: [] }],
+  summary: 'List all CMS pages (public)',
   querystring: cmsListQuery,
   response: {
     200: {
@@ -135,15 +132,12 @@ export const adminListCmsPagesSchema: FastifySchema = {
         },
       },
     },
-    401: errorResponse,
-    403: errorResponse,
   },
 };
 
 export const adminGetCmsPageSchema: FastifySchema = {
   tags: ['Admin CMS'],
-  summary: 'Get CMS page by id (admin)',
-  security: [{ BearerAuth: [] }],
+  summary: 'Get CMS page by id (public)',
   params: cmsParams,
   response: {
     200: {
@@ -159,8 +153,7 @@ export const adminGetCmsPageSchema: FastifySchema = {
 
 export const createCmsPageSchema: FastifySchema = {
   tags: ['Admin CMS'],
-  summary: 'Create CMS page (admin)',
-  security: [{ BearerAuth: [] }],
+  summary: 'Create CMS page (public)',
   body: createCmsBody,
   response: {
     201: {
@@ -177,8 +170,7 @@ export const createCmsPageSchema: FastifySchema = {
 
 export const updateCmsPageSchema: FastifySchema = {
   tags: ['Admin CMS'],
-  summary: 'Update CMS page (admin)',
-  security: [{ BearerAuth: [] }],
+  summary: 'Update CMS page (public)',
   params: cmsParams,
   body: updateCmsBody,
   response: {
@@ -197,8 +189,7 @@ export const updateCmsPageSchema: FastifySchema = {
 
 export const deleteCmsPageSchema: FastifySchema = {
   tags: ['Admin CMS'],
-  summary: 'Delete CMS page (admin)',
-  security: [{ BearerAuth: [] }],
+  summary: 'Delete CMS page (public)',
   params: cmsParams,
   response: {
     200: {

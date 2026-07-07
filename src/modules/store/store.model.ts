@@ -53,7 +53,8 @@ export interface StoreAttributes {
   shopLicenseUrl: string | null;
   panCardUrl: string | null;
   aadharCardUrl: string | null;
-  additionalDocuments: string[];
+  gstDocument: string | null;
+  storeImages: string[];
   bankDetails: BankDetails | null;
   brands: string[];
   promoLabel: string | null;
@@ -84,7 +85,8 @@ export interface StoreCreationAttributes
     | 'shopLicenseUrl'
     | 'panCardUrl'
     | 'aadharCardUrl'
-    | 'additionalDocuments'
+    | 'gstDocument'
+    | 'storeImages'
     | 'bankDetails'
     | 'brands'
   > {}
@@ -119,7 +121,8 @@ class Store extends Model<StoreAttributes, StoreCreationAttributes> implements S
   declare shopLicenseUrl: string | null;
   declare panCardUrl: string | null;
   declare aadharCardUrl: string | null;
-  declare additionalDocuments: string[];
+  declare gstDocument: string | null;
+  declare storeImages: string[];
   declare bankDetails: BankDetails | null;
   declare brands: string[];
   declare promoLabel: string | null;
@@ -157,7 +160,8 @@ class Store extends Model<StoreAttributes, StoreCreationAttributes> implements S
       shopLicenseUrl: this.shopLicenseUrl ?? null,
       panCardUrl: this.panCardUrl ?? null,
       aadharCardUrl: this.aadharCardUrl ?? null,
-      additionalDocuments: this.additionalDocuments ?? [],
+      gstDocument: this.gstDocument ?? null,
+      storeImages: this.storeImages ?? [],
       bankDetails: this.bankDetails ?? null,
       brands: this.brands ?? [],
       promoLabel: this.promoLabel ?? null,
@@ -322,11 +326,16 @@ Store.init(
       allowNull: true,
       field: 'aadhar_card_url',
     },
-    additionalDocuments: {
+    gstDocument: {
+      type: DataTypes.STRING(2048),
+      allowNull: true,
+      field: 'gst_document',
+    },
+    storeImages: {
       type: DataTypes.JSONB,
       allowNull: false,
       defaultValue: [],
-      field: 'additional_documents',
+      field: 'store_images',
     },
     bankDetails: {
       type: DataTypes.JSONB,

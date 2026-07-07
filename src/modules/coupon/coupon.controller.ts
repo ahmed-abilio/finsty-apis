@@ -60,6 +60,14 @@ class CouponController {
     void reply.status(200).send({ success: true, data: { coupon: coupon.toPublicJSON() } });
   }
 
+  async reject(
+    request: FastifyRequest<{ Params: CouponParams }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const coupon = await couponService.reject(request.params.couponId);
+    void reply.status(200).send({ success: true, data: { coupon: coupon.toPublicJSON() } });
+  }
+
   async toggleActive(
     request: FastifyRequest<{ Params: CouponParams }>,
     reply: FastifyReply,
@@ -142,7 +150,6 @@ class CouponController {
       includeGlobal: request.query.includeGlobal === true,
       isApproved: true,
       isActive: true,
-      readyToUse: true,
       userId: request.user.sub,
       page: request.query.page,
       limit: request.query.limit,
@@ -234,11 +241,11 @@ class CouponController {
     });
   }
 
-  async toggleReadyToUse(
+  async getOne(
     request: FastifyRequest<{ Params: CouponParams }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const coupon = await couponService.toggleReadyToUse(request.params.couponId);
+    const coupon = await couponService.getById(request.params.couponId);
     void reply.status(200).send({ success: true, data: { coupon: coupon.toPublicJSON() } });
   }
 
@@ -246,7 +253,13 @@ class CouponController {
     request: FastifyRequest<{ Querystring: ListQuery }>,
     reply: FastifyReply,
   ): Promise<void> {
-    const filters: { storeId?: string; isApproved?: boolean; isActive?: boolean; page?: number; limit?: number } = {};
+    const filters: {
+      storeId?: string;
+      isApproved?: boolean;
+      isActive?: boolean;
+      page?: number;
+      limit?: number;
+    } = {};
     if (request.query.storeId) filters.storeId = request.query.storeId;
     if (request.query.isApproved !== undefined) filters.isApproved = request.query.isApproved;
     if (request.query.isActive !== undefined) filters.isActive = request.query.isActive;

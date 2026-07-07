@@ -1,6 +1,6 @@
 import fp from 'fastify-plugin';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { verifyAccessToken } from '@modules/auth/auth.service';
+import { verifyAccessToken, getActiveSession } from '@modules/auth/auth.service';
 import userService from '@modules/user/user.service';
 import { AppError } from '@utils/appError';
 import type { JwtPayload } from '@types-app/index';
@@ -31,6 +31,15 @@ async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
     return payload;
   }
 
+  // Enforces single active session: the token's sid must match the current
+  // session stored in Redis. A newer login overwrites it, revoking older tokens.
+  async function assertActiveSession(payload: JwtPayload): Promise<void> {
+    const activeSid = await getActiveSession(payload.role, payload.sub);
+    if (!activeSid || activeSid !== payload.sid) {
+      throw AppError.unauthorized('Session superseded by another login', 'SESSION_REVOKED');
+    }
+  }
+
   fastify.decorate(
     'authenticate',
     async function authenticate(
@@ -43,6 +52,7 @@ async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
       }
       const token = authHeader.slice(7);
       const payload = verifyAccessToken(token);
+      await assertActiveSession(payload);
       request.user = await assertAuthenticatedUser(payload);
     },
   );
@@ -57,9 +67,10 @@ async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
       if (!authHeader || !authHeader.startsWith('Bearer ')) return;
       try {
         const payload = verifyAccessToken(authHeader.slice(7));
+        await assertActiveSession(payload);
         request.user = await assertAuthenticatedUser(payload);
       } catch {
-        // invalid token — treat as unauthenticated
+        // invalid token or superseded session — treat as unauthenticated
       }
     },
   );

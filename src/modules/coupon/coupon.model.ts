@@ -23,7 +23,6 @@ export interface CouponAttributes {
   categoryId: string | null;
   isApproved: boolean;
   isActive: boolean;
-  readyToUse: boolean;
   createdBy: string;
   appliesTo: CouponAppliesTo;
   minimumRequirement: CouponMinimumRequirement;
@@ -50,7 +49,6 @@ export interface CouponCreationAttributes
     | 'categoryId'
     | 'isApproved'
     | 'isActive'
-    | 'readyToUse'
     | 'appliesTo'
     | 'minimumRequirement'
     | 'customerEligibility'
@@ -76,7 +74,6 @@ class Coupon extends Model<CouponAttributes, CouponCreationAttributes> implement
   declare categoryId: string | null;
   declare isApproved: boolean;
   declare isActive: boolean;
-  declare readyToUse: boolean;
   declare createdBy: string;
   declare appliesTo: CouponAppliesTo;
   declare minimumRequirement: CouponMinimumRequirement;
@@ -125,7 +122,6 @@ class Coupon extends Model<CouponAttributes, CouponCreationAttributes> implement
       categoryId: this.get('categoryId') ?? raw.categoryId ?? raw.category_id ?? null,
       isApproved: readBool('isApproved', 'is_approved'),
       isActive: readBool('isActive', 'is_active', true),
-      readyToUse: readBool('readyToUse', 'ready_to_use'),
       createdBy: this.get('createdBy'),
       appliesTo: this.get('appliesTo') ?? 'all_products',
       minimumRequirement: this.get('minimumRequirement') ?? 'none',
@@ -224,12 +220,6 @@ Coupon.init(
       allowNull: false,
       defaultValue: true,
       field: 'is_active',
-    },
-    readyToUse: {
-      type: DataTypes.BOOLEAN,
-      allowNull: false,
-      defaultValue: false,
-      field: 'ready_to_use',
     },
     createdBy: {
       type: DataTypes.UUID,
