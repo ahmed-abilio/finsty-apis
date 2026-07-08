@@ -621,6 +621,8 @@ class CouponService {
       includeGlobal?: boolean;
       isApproved?: boolean;
       isActive?: boolean;
+      approvalStatus?: 'approved' | 'pending' | 'rejected';
+      code?: string;
       userId?: string;
       page?: number;
       limit?: number;
@@ -658,10 +660,27 @@ class CouponService {
       );
     }
 
+    const approvalWhere: WhereOptions = (() => {
+      if (filters.approvalStatus === 'approved') {
+        return {
+          isApproved: true,
+          ...(filters.isActive !== undefined ? { isActive: filters.isActive } : {}),
+        };
+      }
+      if (filters.approvalStatus === 'pending') return { isApproved: false, isActive: true };
+      if (filters.approvalStatus === 'rejected') return { isApproved: false, isActive: false };
+      return {
+        ...(filters.isApproved !== undefined ? { isApproved: filters.isApproved } : {}),
+        ...(filters.isActive !== undefined ? { isActive: filters.isActive } : {}),
+      };
+    })();
+
+    const codeTerm = filters.code?.trim().toUpperCase();
+
     const where: WhereOptions = {
       ...storeScope,
-      ...(filters.isApproved !== undefined ? { isApproved: filters.isApproved } : {}),
-      ...(filters.isActive !== undefined ? { isActive: filters.isActive } : {}),
+      ...approvalWhere,
+      ...(codeTerm ? { code: { [Op.iLike]: `%${codeTerm}%` } } : {}),
       ...(userAndConditions.length > 0 ? { [Op.and]: userAndConditions } : {}),
     };
 

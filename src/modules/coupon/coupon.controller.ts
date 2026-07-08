@@ -23,6 +23,8 @@ interface ListQuery {
   includeGlobal?: boolean;
   isApproved?: boolean;
   isActive?: boolean;
+  approvalStatus?: 'approved' | 'pending' | 'rejected';
+  code?: string;
   page?: number;
   limit?: number;
 }
@@ -257,12 +259,16 @@ class CouponController {
       storeId?: string;
       isApproved?: boolean;
       isActive?: boolean;
+      approvalStatus?: 'approved' | 'pending' | 'rejected';
+      code?: string;
       page?: number;
       limit?: number;
     } = {};
     if (request.query.storeId) filters.storeId = request.query.storeId;
     if (request.query.isApproved !== undefined) filters.isApproved = request.query.isApproved;
     if (request.query.isActive !== undefined) filters.isActive = request.query.isActive;
+    if (request.query.approvalStatus) filters.approvalStatus = request.query.approvalStatus;
+    if (request.query.code) filters.code = request.query.code;
     filters.page = request.query.page;
     filters.limit = request.query.limit;
 

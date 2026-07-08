@@ -931,12 +931,11 @@ export const listProductsSchema: FastifySchema = {
 
 export const listBrandsSchema: FastifySchema = {
   tags: ['Products'],
-  summary: 'List all brand names (App Users Only)',
+  summary: 'List brand names (public)',
   description:
-    'Returns all active brand names from the master Brand table. ' +
-    'Requires authentication as it is intended for app users. ' +
+    'Returns active brand names from the master Brand table. ' +
+    'Optional `storeIds` query param filters brands to those used by products in the given stores. ' +
     'Prefer using `GET /brands` for full brand objects including logos.',
-  security: [{ BearerAuth: [] }],
   querystring: {
     type: 'object',
     properties: {
@@ -971,7 +970,6 @@ export const listBrandsSchema: FastifySchema = {
         },
       },
     },
-    401: unauthorized,
   },
 };
 

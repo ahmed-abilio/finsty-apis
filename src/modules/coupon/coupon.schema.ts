@@ -518,6 +518,16 @@ export const adminListCouponsSchema: FastifySchema = {
     properties: {
       isApproved: { type: 'boolean' },
       isActive: { type: 'boolean' },
+      approvalStatus: {
+        type: 'string',
+        enum: ['approved', 'pending', 'rejected'],
+        description:
+          'Approved = isApproved true. Pending = unapproved and active. Rejected = unapproved and inactive.',
+      },
+      code: {
+        type: 'string',
+        description: 'Case-insensitive partial match on coupon code',
+      },
       storeId: { type: 'string' },
       page: { type: 'number', minimum: 1, default: 1 },
       limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },

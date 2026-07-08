@@ -42,10 +42,7 @@ export default async function productRoutes(fastify: FastifyInstance): Promise<v
   // Must be registered before /:productId to avoid param capture
   fastify.get(
     '/brands',
-    {
-      schema: listBrandsSchema,
-      onRequest: [fastify.authenticate],
-    },
+    { schema: listBrandsSchema },
     (request, reply) => productController.listBrands(request as any, reply),
   );
 
