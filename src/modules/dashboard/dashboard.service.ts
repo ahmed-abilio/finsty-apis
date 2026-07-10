@@ -1,6 +1,8 @@
 import { QueryTypes } from 'sequelize';
 import sequelize from '@config/database';
 import type { PaymentStatus } from '@modules/payment/payment.model';
+import type { OrderStatus } from '@modules/order/order.model';
+import { ORDER_STATUS_VALUES } from '@modules/order/order-status.constants';
 import { Roles } from '@modules/user/user.model';
 import {
   enumerateUtcDateKeys,
@@ -41,6 +43,12 @@ export interface PaymentStatusTimelinePoint {
   refunded: number;
 }
 
+export interface OrderStatusSummaryRow {
+  status: OrderStatus;
+  count: number;
+  amount: number;
+}
+
 export interface DashboardActivityItem {
   id: string;
   userName: string;
@@ -55,6 +63,9 @@ export interface AdminDashboardData {
   paymentStatus: {
     summary: PaymentStatusSummaryRow[];
     timeline: PaymentStatusTimelinePoint[];
+  };
+  orderStatus: {
+    summary: OrderStatusSummaryRow[];
   };
   recentActivity: DashboardActivityItem[];
 }
@@ -153,6 +164,25 @@ async function fetchPaymentStatusTimeline(range: DateRange): Promise<PaymentStat
   return dateKeys.map((date) => byDate.get(date)!);
 }
 
+async function fetchOrderStatusSummary(range: DateRange): Promise<OrderStatusSummaryRow[]> {
+  const rows = await sequelize.query<{ status: OrderStatus; count: string; amount: string }>(
+    `SELECT status, COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS amount
+     FROM orders
+     WHERE "createdAt" >= :start AND "createdAt" <= :end
+     GROUP BY status`,
+    { replacements: { start: range.start, end: range.end }, type: QueryTypes.SELECT },
+  );
+  const byStatus = new Map(rows.map((r) => [r.status, r]));
+  return ORDER_STATUS_VALUES.map((status) => {
+    const row = byStatus.get(status);
+    return {
+      status,
+      count: Number(row?.count ?? 0),
+      amount: parseFloat(Number(row?.amount ?? 0).toFixed(2)),
+    };
+  });
+}
+
 async function fetchRecentActivity(): Promise<DashboardActivityItem[]> {
   const [orderRows, storeRows] = await Promise.all([
     sequelize.query<{
@@ -234,6 +264,7 @@ class DashboardService {
       storesPrevious,
       paymentSummary,
       paymentTimeline,
+      orderSummary,
       recentActivity,
     ] = await Promise.all([
       countOrders(range),
@@ -246,6 +277,7 @@ class DashboardService {
       countNewStores(previous),
       fetchPaymentStatusSummary(range),
       fetchPaymentStatusTimeline(range),
+      fetchOrderStatusSummary(range),
       fetchRecentActivity(),
     ]);
 
@@ -263,6 +295,9 @@ class DashboardService {
       paymentStatus: {
         summary: paymentSummary,
         timeline: paymentTimeline,
+      },
+      orderStatus: {
+        summary: orderSummary,
       },
       recentActivity,
     };

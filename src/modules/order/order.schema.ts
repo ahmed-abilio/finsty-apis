@@ -2,6 +2,7 @@ import { FastifySchema } from 'fastify';
 
 import { validationErrorResponse } from '@utils/sharedSchemas';
 import { ORDER_STATUS_VALUES } from './order-status.constants';
+import { returnObject } from './orderReturn.schema';
 
 const unauthorized = {
   type: 'object',
@@ -420,6 +421,11 @@ export const orderObject = {
       description:
         'True after the vendor (or system) successfully marked the order dispatch-ready with Shadowfax.',
     },
+    orderAccepted: {
+      type: 'boolean',
+      description:
+        'True after the vendor has explicitly accepted the order. Required before dispatch-ready can be set.',
+    },
     payments: { type: 'array', items: paymentObject },
     deliveryWaivedReason: {
       type: 'string',
@@ -437,7 +443,7 @@ export const orderObject = {
     statusHistory: {
       type: 'array',
       description:
-        'Chronological status timeline. Populated with real transition timestamps on vendor endpoints; other endpoints return only the initial `pending` entry.',
+        'Chronological status timeline. Fully populated on vendor and admin order-detail endpoints; other endpoints return only the initial `pending` entry.',
       items: {
         type: 'object',
         properties: {
@@ -907,6 +913,43 @@ export const vendorGetOrderSchema: FastifySchema = {
   },
 };
 
+// ─── PATCH /orders/vendor/:orderId/accept ────────────────────────────────────
+
+export const vendorAcceptOrderSchema: FastifySchema = {
+  tags: ['Orders'],
+  operationId: 'vendorAcceptOrder',
+  summary: 'Accept an order (vendor)',
+  description:
+    'Marks an order as accepted by the vendor. ' +
+    'Only orders in `confirmed` status (i.e. paid) can be accepted. ' +
+    'This must be done before the order can be marked dispatch-ready.',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['orderId'],
+    properties: { orderId: orderRefParam },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', properties: { order: orderObject } },
+      },
+    },
+    400: badRequest,
+    401: unauthorized,
+    403: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        error: { type: 'object', properties: { code: { type: 'string' }, message: { type: 'string' } } },
+      },
+    },
+    404: notFound,
+  },
+};
+
 // ─── PUT /orders/vendor/:orderId/dispatch-ready ──────────────────────────────
 
 export const vendorDispatchReadySchema: FastifySchema = {
@@ -1064,6 +1107,11 @@ const adminOrderWithCustomer = {
         profileImage: { type: 'string', nullable: true },
       },
     },
+    returns: {
+      type: 'array',
+      description: 'All return records for this order (admin detail only).',
+      items: returnObject,
+    },
   },
 } as const;
 
@@ -1081,8 +1129,14 @@ export const adminListOrdersSchema: FastifySchema = {
       storeId: { type: 'string', format: 'uuid' },
       search: { type: 'string' },
       email: { type: 'string' },
-      from: { type: 'string', format: 'date-time' },
-      to: { type: 'string', format: 'date-time' },
+      from: {
+        type: 'string',
+        description: 'Range start on createdAt (ISO or YYYY-MM-DD). Requires to.',
+      },
+      to: {
+        type: 'string',
+        description: 'Range end on createdAt (ISO or YYYY-MM-DD). Requires from.',
+      },
       deliveryType: { type: 'string', enum: ['delivery', 'pickup'] },
     },
     additionalProperties: false,

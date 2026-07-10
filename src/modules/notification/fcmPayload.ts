@@ -1,10 +1,19 @@
 import type { MulticastMessage } from 'firebase-admin/messaging';
-import type { NotificationPayload } from './notification.types';
+import { NotificationType, type NotificationPayload } from './notification.types';
+
+const DEFAULT_SOUND = 'default';
+
+const IOS_SOUND_BY_TYPE: Partial<Record<NotificationType, string>> = {
+  [NotificationType.VENDOR_NEW_ORDER]: 'booking_recieved.caf',
+};
 
 export function buildMulticastMessage(
   tokens: string[],
   payload: NotificationPayload,
+  type?: NotificationType,
 ): MulticastMessage {
+  const iosSound = (type && IOS_SOUND_BY_TYPE[type]) ?? DEFAULT_SOUND;
+
   return {
     tokens,
     notification: {
@@ -15,7 +24,11 @@ export function buildMulticastMessage(
     apns: {
       payload: {
         aps: {
-          sound: 'default',
+          alert: {
+            title: payload.title,
+            body: payload.body,
+          },
+          sound: iosSound,
           badge: 1,
         },
       },

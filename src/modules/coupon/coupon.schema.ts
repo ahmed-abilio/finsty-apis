@@ -529,6 +529,14 @@ export const adminListCouponsSchema: FastifySchema = {
         description: 'Case-insensitive partial match on coupon code',
       },
       storeId: { type: 'string' },
+      from: {
+        type: 'string',
+        description: 'Range start on createdAt (ISO or YYYY-MM-DD).',
+      },
+      to: {
+        type: 'string',
+        description: 'Range end on createdAt (ISO or YYYY-MM-DD).',
+      },
       page: { type: 'number', minimum: 1, default: 1 },
       limit: { type: 'number', minimum: 1, maximum: 100, default: 20 },
     },

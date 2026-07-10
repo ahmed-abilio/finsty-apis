@@ -197,6 +197,17 @@ class OrderController {
     void reply.status(200).send({ success: true, data: { order } });
   }
 
+  async vendorAcceptOrder(
+    request: FastifyRequest<{ Params: OrderParams }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const order = await orderService.markVendorOrderAccepted(
+      request.params.orderId,
+      request.user.sub,
+    );
+    void reply.status(200).send({ success: true, data: { order } });
+  }
+
   async vendorDispatchReady(
     request: FastifyRequest<{ Params: OrderParams; Body: VendorDispatchReadyBody }>,
     reply: FastifyReply,

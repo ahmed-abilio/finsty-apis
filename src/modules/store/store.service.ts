@@ -21,6 +21,7 @@ import { AppError } from '@utils/appError';
 import brandService from '@modules/brand/brand.service';
 import sequelize from '@config/database';
 import logger from '@utils/logger';
+import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
 import otpService from '@modules/otp/otp.service';
 import vendorDashboardService from './vendorDashboard.service';
 import vendorRevenueService from './vendorRevenue.service';
@@ -49,6 +50,8 @@ export interface StoreSearchQuery {
   onboardingStatus?: string;
   page?: number;
   limit?: number;
+  from?: string;
+  to?: string;
 }
 
 export interface CategoryExplorerQuery {
@@ -241,6 +244,8 @@ class StoreService {
       email,
       isActive,
       onboardingStatus,
+      from,
+      to,
       page = 1,
       limit = 20,
     } = query;
@@ -291,6 +296,13 @@ class StoreService {
 
     if (email?.trim()) {
       (where as Record<string, unknown>)['email'] = { [Op.iLike]: `%${email.trim()}%` };
+    }
+
+    if (from || to) {
+      (where as Record<string, unknown>)['createdAt'] = {
+        ...(from ? { [Op.gte]: normalizeRangeStart(from) } : {}),
+        ...(to ? { [Op.lte]: normalizeRangeEnd(to) } : {}),
+      };
     }
 
     let distanceLiteral: ReturnType<typeof literal> | null = null;

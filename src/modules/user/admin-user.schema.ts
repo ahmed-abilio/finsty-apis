@@ -53,8 +53,14 @@ export const adminListUsersSchema: FastifySchema = {
       isActive: { type: 'boolean' },
       search: { type: 'string' },
       email: { type: 'string' },
-      from: { type: 'string', format: 'date-time' },
-      to: { type: 'string', format: 'date-time' },
+      from: {
+        type: 'string',
+        description: 'Join-date range start (ISO or YYYY-MM-DD). Filters on createdAt.',
+      },
+      to: {
+        type: 'string',
+        description: 'Join-date range end (ISO or YYYY-MM-DD). Filters on createdAt.',
+      },
     },
     additionalProperties: false,
   },

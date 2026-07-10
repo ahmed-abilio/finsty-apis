@@ -396,8 +396,14 @@ export const adminListPaymentsSchema: FastifySchema = {
       orderId: { type: 'string' },
       email: { type: 'string' },
       provider: { type: 'string' },
-      from: { type: 'string', format: 'date-time' },
-      to: { type: 'string', format: 'date-time' },
+      from: {
+        type: 'string',
+        description: 'Range start on createdAt (ISO or YYYY-MM-DD). Requires to.',
+      },
+      to: {
+        type: 'string',
+        description: 'Range end on createdAt (ISO or YYYY-MM-DD). Requires from.',
+      },
     },
     additionalProperties: false,
   },

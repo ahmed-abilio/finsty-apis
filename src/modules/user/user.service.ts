@@ -7,6 +7,7 @@ import { getRoleUserModel, RoleUserCreationAttributes } from './role-user.model'
 import { AppError } from '@utils/appError';
 import { AuthProvider } from '@types-app/index';
 import logger from '@utils/logger';
+import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
 
 export interface AdminUserListFilters {
   page?: number;
@@ -57,8 +58,8 @@ function buildUserWhere(filters: AdminUserListFilters): WhereOptions {
 
   if (filters.from || filters.to) {
     where.createdAt = {
-      ...(filters.from ? { [Op.gte]: new Date(filters.from) } : {}),
-      ...(filters.to ? { [Op.lte]: new Date(filters.to) } : {}),
+      ...(filters.from ? { [Op.gte]: normalizeRangeStart(filters.from) } : {}),
+      ...(filters.to ? { [Op.lte]: normalizeRangeEnd(filters.to) } : {}),
     };
   }
 
@@ -372,11 +373,11 @@ class UserService {
     }
     if (filters.from) {
       conditions.push('created_at >= :from');
-      replacements.from = new Date(filters.from);
+      replacements.from = normalizeRangeStart(filters.from);
     }
     if (filters.to) {
       conditions.push('created_at <= :to');
-      replacements.to = new Date(filters.to);
+      replacements.to = normalizeRangeEnd(filters.to);
     }
     if (filters.email?.trim()) {
       conditions.push('email ILIKE :email');

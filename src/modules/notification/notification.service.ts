@@ -87,7 +87,12 @@ export async function sendPushToUser(
 
   for (let i = 0; i < tokens.length; i += FCM_BATCH_SIZE) {
     const batch = tokens.slice(i, i + FCM_BATCH_SIZE);
-    const message = buildMulticastMessage(batch, payload);
+    const message = buildMulticastMessage(batch, payload, type);
+
+    logger.info(
+      { type, iosSound: message.apns?.payload?.aps?.sound },
+      'FCM push sound resolved',
+    );
 
     try {
       const result = await firebaseMessaging.sendEachForMulticast(message);

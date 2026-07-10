@@ -14,6 +14,7 @@ import {
   adminListOrdersSchema,
   adminGetOrderSchema,
   vendorGetOrderSchema,
+  vendorAcceptOrderSchema,
   vendorDispatchReadySchema,
   vendorUpdateStatusSchema,
 } from './order.schema';
@@ -60,6 +61,15 @@ export default async function orderRoutes(fastify: FastifyInstance): Promise<voi
       schema: vendorGetOrderSchema,
     },
     orderController.vendorGetOne.bind(orderController),
+  );
+
+  fastify.patch<{ Params: { orderId: string } }>(
+    '/vendor/:orderId/accept',
+    {
+      preHandler: [fastify.authenticate, fastify.requireRole(Roles.VENDOR, Roles.ADMIN)],
+      schema: vendorAcceptOrderSchema,
+    },
+    orderController.vendorAcceptOrder.bind(orderController),
   );
 
   fastify.patch<{ Params: { orderId: string }; Body: { status: string } }>(

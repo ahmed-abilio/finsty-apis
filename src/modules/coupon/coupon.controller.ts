@@ -27,6 +27,8 @@ interface ListQuery {
   code?: string;
   page?: number;
   limit?: number;
+  from?: string;
+  to?: string;
 }
 
 class CouponController {
@@ -263,12 +265,16 @@ class CouponController {
       code?: string;
       page?: number;
       limit?: number;
+      from?: string;
+      to?: string;
     } = {};
     if (request.query.storeId) filters.storeId = request.query.storeId;
     if (request.query.isApproved !== undefined) filters.isApproved = request.query.isApproved;
     if (request.query.isActive !== undefined) filters.isActive = request.query.isActive;
     if (request.query.approvalStatus) filters.approvalStatus = request.query.approvalStatus;
     if (request.query.code) filters.code = request.query.code;
+    if (request.query.from) filters.from = request.query.from;
+    if (request.query.to) filters.to = request.query.to;
     filters.page = request.query.page;
     filters.limit = request.query.limit;
 

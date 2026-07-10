@@ -341,6 +341,14 @@ export const listStoresSchema: FastifySchema = {
         enum: ['PENDING', 'APPROVED', 'REJECTED'],
         description: 'Filter by onboarding status'
       },
+      from: {
+        type: 'string',
+        description: 'Range start on createdAt (ISO or YYYY-MM-DD).',
+      },
+      to: {
+        type: 'string',
+        description: 'Range end on createdAt (ISO or YYYY-MM-DD).',
+      },
     },
     additionalProperties: false,
   },

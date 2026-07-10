@@ -1,4 +1,15 @@
 const paymentStatusEnum = ['pending', 'captured', 'failed', 'refund_requested', 'refunded'] as const;
+const orderStatusEnum = [
+  'pending',
+  'confirmed',
+  'rider_assigned',
+  'at_store',
+  'picked_up',
+  'arrived',
+  'delivered',
+  'cancelled',
+  'returned',
+] as const;
 
 const dashboardStatSchema = {
   type: 'object',
@@ -17,6 +28,15 @@ const paymentSummarySchema = {
     status: { type: 'string', enum: [...paymentStatusEnum] },
     count: { type: 'number' },
     amount: { type: 'number' },
+  },
+};
+
+const orderSummarySchema = {
+  type: 'object',
+  properties: {
+    status: { type: 'string', enum: [...orderStatusEnum] },
+    count: { type: 'number' },
+    amount: { type: 'number', description: 'Sum of order total_amount for this status' },
   },
 };
 
@@ -47,7 +67,7 @@ export const getAdminDashboardSchema = {
   tags: ['Admin dashboard'],
   summary: 'Admin platform dashboard',
   description:
-    'KPI stats, payment status breakdown, and recent activity for the selected date range. ' +
+    'KPI stats, payment and order status breakdown, and recent activity for the selected date range. ' +
     'Defaults to the last 30 days when from/to are omitted.',
   querystring: {
     type: 'object',
@@ -77,6 +97,12 @@ export const getAdminDashboardSchema = {
               properties: {
                 summary: { type: 'array', items: paymentSummarySchema },
                 timeline: { type: 'array', items: paymentTimelineSchema },
+              },
+            },
+            orderStatus: {
+              type: 'object',
+              properties: {
+                summary: { type: 'array', items: orderSummarySchema },
               },
             },
             recentActivity: { type: 'array', items: activitySchema },

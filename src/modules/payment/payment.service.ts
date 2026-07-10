@@ -27,6 +27,7 @@ import {
 import { buildOrderRefWhere } from '@modules/order/orderRef';
 import { transitionOrderStatus } from '@modules/shadowfax/tracking/order-status-transition.service';
 import userService from '@modules/user/user.service';
+import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
 
 // ─── State machine: valid transitions ─────────────────────────────────────────
 
@@ -845,8 +846,8 @@ class PaymentService {
         );
       }
       where.createdAt = {
-        [Op.gte]: new Date(filters.from),
-        [Op.lte]: new Date(filters.to),
+        [Op.gte]: normalizeRangeStart(filters.from),
+        [Op.lte]: normalizeRangeEnd(filters.to),
       };
     }
 

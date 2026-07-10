@@ -48,6 +48,8 @@ import { maybeSyncOrderShadowfaxStatusForOrderDetail } from './orderShadowfaxSyn
 import { buildWalletPaidByOrderIds, resolveWalletAmountPaid } from './orderWalletPaid';
 import { buildShadowfaxOrderIdByOrderIds, resolveShadowfaxOrderId } from './orderShadowfax';
 import { buildOrderStatusHistoryByOrderIds, type OrderStatusEvent } from './orderStatusHistoryLookup';
+import orderReturnService from './orderReturn.service';
+import { Roles } from '@modules/user/user.model';
 import {
   buildActiveReturnByOrderIds,
   resolveActiveReturn,
@@ -74,6 +76,7 @@ import {
   notifyVendorsOrderCancelled,
 } from '@modules/notification/notification.order';
 import { failPendingPaymentsForOrder } from '@modules/payment/payment.service';
+import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
 
 export type { CreateOrderInput } from './order.checkout.types';
 
@@ -1089,6 +1092,44 @@ class OrderService {
     return this.formatOrder(order, undefined, undefined, shadowfaxOrderIdByOrderId, activeReturnByOrderId);
   }
 
+  // ─── Vendor: accept order ─────────────────────────────────────────────────────
+
+  async markVendorOrderAccepted(
+    orderId: string,
+    vendorId: string,
+  ): Promise<ReturnType<typeof this.formatOrder>> {
+    const store = await Store.findOne({ where: { ownerId: vendorId } });
+    if (!store) throw AppError.forbidden('Vendor has no associated store', 'NO_STORE');
+
+    const storeOrderIds = sequelize.literal(
+      `(SELECT DISTINCT oi.order_id FROM order_items oi INNER JOIN products p ON p.id = oi.product_id WHERE p.store_id = ${sequelize.escape(store.id)})`,
+    );
+
+    const orderRefWhere = await buildOrderRefWhere(orderId);
+
+    const order = await Order.findOne({
+      where: {
+        [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
+      },
+      attributes: ['id', 'status', 'orderAccepted'],
+    });
+
+    if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
+
+    if (order.status !== 'confirmed') {
+      throw AppError.badRequest(
+        `Order can only be accepted when status is "confirmed", current status is "${order.status}"`,
+        'ORDER_NOT_CONFIRMED',
+      );
+    }
+
+    if (!order.orderAccepted) {
+      await order.update({ orderAccepted: true });
+    }
+
+    return this.getVendorOrderById(orderId, vendorId);
+  }
+
   // ─── Vendor: mark order dispatch-ready (Shadowfax) ───────────────────────────
 
   async markVendorOrderDispatchReady(
@@ -1109,7 +1150,7 @@ class OrderService {
       where: {
         [Op.and]: [orderRefWhere, { id: { [Op.in]: storeOrderIds } }],
       },
-      attributes: ['id', 'status', 'deliveryType'],
+      attributes: ['id', 'status', 'deliveryType', 'orderAccepted'],
     });
 
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
@@ -1119,6 +1160,13 @@ class OrderService {
       throw AppError.badRequest(
         `Cannot mark order as dispatch-ready with status "${order.status}"`,
         'ORDER_NOT_DISPATCH_READY',
+      );
+    }
+
+    if (!order.orderAccepted) {
+      throw AppError.badRequest(
+        'Order must be accepted by the vendor before marking dispatch-ready',
+        'ORDER_NOT_ACCEPTED',
       );
     }
 
@@ -1293,8 +1341,8 @@ class OrderService {
       }
       andConditions.push({
         createdAt: {
-          [Op.gte]: new Date(filters.from),
-          [Op.lte]: new Date(filters.to),
+          [Op.gte]: normalizeRangeStart(filters.from),
+          [Op.lte]: normalizeRangeEnd(filters.to),
         },
       });
     }
@@ -1458,23 +1506,28 @@ class OrderService {
 
     if (!order) throw AppError.notFound('Order not found', 'ORDER_NOT_FOUND');
 
-    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId] = await Promise.all([
-      buildWalletPaidByOrderIds([order.id]),
-      buildShadowfaxOrderIdByOrderIds([order.id]),
-      buildActiveReturnByOrderIds([order.id]),
-    ]);
+    const [walletPaidByOrderId, shadowfaxOrderIdByOrderId, activeReturnByOrderId, statusHistoryByOrderId, returns] =
+      await Promise.all([
+        buildWalletPaidByOrderIds([order.id]),
+        buildShadowfaxOrderIdByOrderIds([order.id]),
+        buildActiveReturnByOrderIds([order.id]),
+        buildOrderStatusHistoryByOrderIds([order.id]),
+        orderReturnService.listReturnsForOrder(order.id, '', Roles.ADMIN),
+      ]);
     const formatted = this.formatOrder(
       order,
       undefined,
       walletPaidByOrderId,
       shadowfaxOrderIdByOrderId,
       activeReturnByOrderId,
+      statusHistoryByOrderId,
     );
     const user = (order as unknown as { user?: User }).user;
 
     return {
       ...formatted,
       customer: user ? this.formatOrderCustomer(user) : null,
+      returns,
     };
   }
 

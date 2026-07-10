@@ -50,7 +50,7 @@ const returnItemObject = {
   },
 } as const;
 
-const returnObject = {
+export const returnObject = {
   type: 'object',
   properties: {
     id: { type: 'string', format: 'uuid' },

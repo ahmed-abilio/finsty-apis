@@ -16,6 +16,7 @@ import { Roles } from '@modules/user/user.model';
 import { computeMoneyDiscount, stackMoneyDiscounts } from './couponStackMath';
 import { notifyAdminsNewCouponApplication, notifyVendorCouponApproved } from '@modules/notification/notification.coupon';
 import logger from '@utils/logger';
+import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
 
 export interface CreateCouponInput {
   code: string;
@@ -626,6 +627,8 @@ class CouponService {
       userId?: string;
       page?: number;
       limit?: number;
+      from?: string;
+      to?: string;
     } = {},
   ) {
     const storeScope: WhereOptions =
@@ -682,6 +685,14 @@ class CouponService {
       ...approvalWhere,
       ...(codeTerm ? { code: { [Op.iLike]: `%${codeTerm}%` } } : {}),
       ...(userAndConditions.length > 0 ? { [Op.and]: userAndConditions } : {}),
+      ...(filters.from || filters.to
+        ? {
+            createdAt: {
+              ...(filters.from ? { [Op.gte]: normalizeRangeStart(filters.from) } : {}),
+              ...(filters.to ? { [Op.lte]: normalizeRangeEnd(filters.to) } : {}),
+            },
+          }
+        : {}),
     };
 
     const page = Math.max(1, filters.page ?? 1);
