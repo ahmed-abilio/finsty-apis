@@ -1,5 +1,5 @@
 import { FastifyRequest, FastifyReply } from 'fastify';
-import couponService, { CreateCouponInput } from './coupon.service';
+import couponService, { CreateCouponInput, UpdateCouponInput } from './coupon.service';
 import Store from '@modules/store/store.model';
 import { AppError } from '@utils/appError';
 import { parseRevenueDateRange } from '@modules/store/vendorDashboard.utils';
@@ -54,6 +54,14 @@ class CouponController {
 
     const coupon = await couponService.create(request.body, creatorId, role, creatorStoreId);
     void reply.status(201).send({ success: true, data: { coupon: coupon.toPublicJSON() } });
+  }
+
+  async update(
+    request: FastifyRequest<{ Params: CouponParams; Body: UpdateCouponInput }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const coupon = await couponService.update(request.params.couponId, request.body);
+    void reply.status(200).send({ success: true, data: { coupon: coupon.toPublicJSON() } });
   }
 
   async approve(

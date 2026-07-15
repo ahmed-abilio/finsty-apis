@@ -593,3 +593,36 @@ export const adminGetCouponSchema: FastifySchema = {
     404: errorResponse,
   },
 };
+
+// ─── PATCH /admin/coupons/:couponId ────────────────────────────────────────────
+
+export const updateCouponSchema: FastifySchema = {
+  tags: ['Coupons'],
+  summary: 'Update an existing coupon (admin only)',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['couponId'],
+    properties: { couponId: { type: 'string' } },
+  },
+  body: {
+    type: 'object',
+    properties: {
+      ...createCouponBody.properties,
+      isActive: { type: 'boolean' },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: { type: 'object', properties: { coupon: couponObject } },
+      },
+    },
+    400: validationErrorResponse,
+    401: errorResponse,
+    403: errorResponse,
+    404: errorResponse,
+  },
+};

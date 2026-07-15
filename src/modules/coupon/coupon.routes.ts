@@ -9,6 +9,7 @@ import {
   listCouponsSchema,
   adminListCouponsSchema,
   adminGetCouponSchema,
+  updateCouponSchema,
   vendorListCouponsSchema,
   vendorCouponStatsSchema,
 } from './coupon.schema';
@@ -100,5 +101,12 @@ export async function adminCouponRoutes(fastify: FastifyInstance): Promise<void>
     '/:couponId/toggle',
     { schema: toggleCouponSchema },
     couponController.toggleActive.bind(couponController),
+  );
+
+  // PATCH /admin/coupons/:couponId — update a coupon
+  fastify.patch(
+    '/:couponId',
+    { schema: updateCouponSchema },
+    couponController.update.bind(couponController),
   );
 }

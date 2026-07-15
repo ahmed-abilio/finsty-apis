@@ -208,7 +208,7 @@ export const formatError = (
     error: {
       code,
       // Never expose internal error details to clients in production
-      message: !isDev && statusCode >= 500 ? 'Internal server error' : message,
+      message: !isDev && statusCode >= 500 ? 'Internal server error' : (message === 'An unexpected error occurred' && (error as any).message ? (error as any).message : message),
       statusCode,
       ...(details !== undefined && { details }),
       ...(isDev && { stack: (error as Error).stack }),

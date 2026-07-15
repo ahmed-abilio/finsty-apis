@@ -41,6 +41,8 @@ export interface CreateCouponInput {
   customerIds?: string[] | null;
 }
 
+export type UpdateCouponInput = Partial<CreateCouponInput> & { isActive?: boolean };
+
 export interface CouponValidationContext {
   userId: string;
   subtotal: number;
@@ -273,6 +275,47 @@ class CouponService {
       });
     }
 
+    return coupon;
+  }
+
+  async update(couponId: string, payload: UpdateCouponInput): Promise<Coupon> {
+    const coupon = await Coupon.findByPk(couponId);
+    if (!coupon) {
+      throw AppError.notFound('Coupon not found', 'COUPON_NOT_FOUND');
+    }
+
+    if (payload.code) {
+      const code = assertValidCouponCode(payload.code);
+      if (code !== coupon.code) {
+        const existing = await Coupon.findOne({ where: { code } });
+        if (existing) {
+          throw AppError.badRequest('Coupon code already exists', 'COUPON_CODE_EXISTS');
+        }
+        coupon.code = code;
+      }
+    }
+
+    if (payload.type) coupon.type = payload.type;
+    if (payload.value !== undefined) coupon.value = payload.value;
+    if (payload.minOrderValue !== undefined) coupon.minOrderValue = payload.minOrderValue;
+    if (payload.maxDiscountCap !== undefined) coupon.maxDiscountCap = payload.maxDiscountCap;
+    if (payload.validFrom) coupon.validFrom = new Date(payload.validFrom);
+    if (payload.validTo) coupon.validTo = new Date(payload.validTo);
+    if (payload.usageLimitTotal !== undefined) coupon.usageLimitTotal = payload.usageLimitTotal;
+    if (payload.usageLimitPerUser !== undefined) coupon.usageLimitPerUser = payload.usageLimitPerUser;
+    if (payload.isStackable !== undefined) coupon.isStackable = payload.isStackable;
+    if (payload.isFirstOrderOnly !== undefined) coupon.isFirstOrderOnly = payload.isFirstOrderOnly;
+    if (payload.storeId !== undefined) coupon.storeId = payload.storeId;
+    if (payload.categoryId !== undefined) coupon.categoryId = payload.categoryId;
+    if (payload.appliesTo) coupon.appliesTo = payload.appliesTo;
+    if (payload.minimumRequirement) coupon.minimumRequirement = payload.minimumRequirement;
+    if (payload.customerEligibility) coupon.customerEligibility = payload.customerEligibility;
+    if (payload.productIds !== undefined) coupon.productIds = payload.productIds;
+    if (payload.categoryIds !== undefined) coupon.categoryIds = payload.categoryIds;
+    if (payload.customerIds !== undefined) coupon.customerIds = payload.customerIds;
+    if (payload.isActive !== undefined) coupon.isActive = payload.isActive;
+
+    await coupon.save();
     return coupon;
   }
 

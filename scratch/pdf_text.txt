@@ -1,0 +1,143 @@
+--- PAGE 1 ---
+FINSTY DASHBOARD 
+1. Super Dashboard: 
+ 
+a. Live Orders: Last 30 min, Avg TAT vs SLA, % orders breaching SLA = red 
+alert 
+b. Today’s Money: GMV, Commission, COD collected, Payout due 
+c. Health: RTO %, Cancellation %, OOS % 
+d. Map: Orders by pincode + avg delivery time per cluster 
+ 
+2. Orders Dashboard: 
+ 
+a. Purpose: Real-time view of all order activity 
+b. Key Metrics: Total orders, Revenue, AOV, Fulfillment rate, Cancel/Return rate 
+c. Core Features: Live order feed, status-wise breakdown, channel-wise split, 
+order trend graph, SLA alerts for delays 
+d. Filters: Date, Status, Channel, Location, Payment type 
+ 
+3. Finance Dashboard Purpose:  
+ 
+a. Money in vs money out. Health check for the business 
+b. Key Metrics: Gross revenue, Net revenue, COGS, Gross margin, Ad spend, 
+Refunds, Net profit, Cash in bank 
+c. Core Features: P&L view, Spendings by category, Savings/Reserves tracker, 
+Tax liability, Burn rate 
+d. Charts: Revenue vs Spend trend, Margin % over time 
+e. Note: Connect to Razorpay, bank 
+ 
+4. Vendor Analysis: 
+ 
+a. Purpose: Track supplier performance and costs 
+b. Key Metrics: Cost per vendor, Fulfillment time, Defect/return rate, Stock-
+outs caused 
+c. Core Features: Vendor scorecard, Price comparison, Lead time tracker, 
+Payouts due 
+d. Use case: Renegotiate terms with slow/expensive vendors 
+e. Onboarding: KYC, GST, PAN, Bank, Warehouse pincode, Pickup slot 
+f. Status: Active / Paused / Blocked 
+g. Commission: Per category or vendor 
+h. Wallet: Sales - Commission - Shipping - Penalties = Payout 
+i. Payout Run: Date range → Auto calc → Upload UTR → SMS 
+
+
+--- PAGE 2 ---
+j. Scorecard: Dispatch TAT, Packaging rating, RTO %, Avg delivery time 
+ 
+5. Logistics Analysis: 
+ 
+a. Purpose: Delivery performance and shipping costs 
+b. Key Metrics: Avg delivery time, RTO %, Shipping cost per order, Courier 
+performance 
+c. Core Features: Pin code heatmap, Courier-wise SLA breach, COD vs Prepaid 
+delivery rates, RTO reasons 
+d. Integrations: ShadowFax 
+ 
+6. Marketing Analysis: 
+ 
+a. Purpose: ROI on every rupee spent to acquire users 
+b. Key Metrics: Ad spend, CAC, ROAS, CTR, CPM, Blended CAC 
+c. Core Features: Channel-wise performance, Campaign breakdown, Creative-
+level ROAS, Attribution model 
+ 
+7. Sales Analysis: 
+ 
+a. Purpose: What’s selling, to whom, where, when 
+b. Key Metrics: Revenue by SKU, Category, City, New vs Repeat sales, Discount 
+impact 
+c. Core Features: Top selling products, Dead stock list, Sales by time of day, 
+Cohort revenue 
+d. Chart: Revenue waterfall: Gross → Discounts → Returns → Net 
+ 
+8. Customer Care Dashboard: 
+ 
+a. Purpose: Support load, speed, and satisfaction 
+b. Key Metrics: Tickets created, Avg first response, Resolution time, CSAT/NPS, 
+Escalation rate 
+c. Core Features: Live ticket queue, Agent performance, Top complaint 
+reasons, Order-linked tickets 
+d. Order Actions: Cancel Order: Pre-dispatch only. Auto refund if prepaid 
+e. Initiate Return: 60 mins window. Reason dropdown + pickup slot 
+f. Process Refund: Full/Partial. Prepaid → wallet credit 
+g. Edit Address: Pre-dispatch only. Re-checks vendor serviceability 
+h. Add Compensation: Wallet credit/coupon for bad experience 
+i. Audit Log: Every action logged with agent ID + timestamp + reason 
+j. RBAC: Support can refund/return/cancel. Finance approves >₹1000 refunds. 
+Ops view-only. 
+
+
+--- PAGE 3 ---
+9. Vendor Registration Team & Incentive Dashboard: 
+ 
+a. Agent Leaderboard: Name | Shops Visited | Verified | Live | Today’s ₹ 
+b. Field Check-in: GPS punch-in at shop, timestamp, photo proof of visit 
+c. Funnel: Shop Visited → Interested → Docs → Verification → Live   
+d. Incentive: ₹50 per vendor marked "Live". Live = KYC + 1 product + QC pass 
+e. Map View: Plot visited shops on map, color by status. Avoids duplicate visits 
+f. Quality Check: Clawback ₹50 if vendor has 0 orders in 30 days 
+g. Exports: Daily route report + monthly payout sheet for finance 
+ 
+ 
+10. App Installs & Usage Analysis: 
+ 
+a. Purpose: Product health and growth loops 
+b. Key Metrics: Installs, DAU/WAU/MAU, Stickiness, Session length, Retention 
+D1/D7/D30, Churn 
+c. Core Features: Funnel: Install → Signup → First Order → Repeat, Feature 
+adoption, Crash rate 
+ 
+11. Coupons, Content, etc Editing Panel: 
+ 
+a. Purpose: Non-dev team can control growth levers 
+b. Core Features: Coupons: Create/edit, set rules, usage limits, track ROI per 
+code 
+c. Content: Banners, homepage blocks, app notifications, popups 
+d. Flags: Enable/disable features, A/B test variants 
+e. Permissions: Role-based access so marketing can’t break checkout 
+ 
+12. Inventory & Procurement Dashboard: 
+ 
+a. Why: To track out of stock, etc 
+b. Key Metrics: Stock on hand, Days of inventory left, Reorder alerts, Dead 
+stock value 
+c. Features: Low stock alerts, PO generation, Demand forecasting 
+ 
+13. User Cohorts & LTV Dashboard: 
+ 
+a. Why: To track if customers are profitable long-term 
+b. Key Metrics: LTV by acquisition channel, Payback period, Repeat rate, Churn 
+by cohort 
+c. Features: Cohort table: Month 0, M1, M2 revenue. Predict 90-day LTV 
+ 
+
+
+--- PAGE 4 ---
+14. Alerts & Anomaly Dashboard: 
+ 
+a. Why: To avoid waiting for weekly reports to catch fires 
+b. Features: Slack/WhatsApp alerts for: Revenue drop >20% WoW, Spike in 
+RTO, Payment gateway failure, CAC suddenly 2x, Stock-out on top SKU 
+ 
+NOTE: Give Role Based Access for all Modules 
+
+
