@@ -21,6 +21,9 @@ import {
   getMyDashboardSchema,
   getMyRevenueSchema,
   getStoreBySlugSchema,
+  adminGetStoreDashboardSchema,
+  adminGetStoreRevenueSchema,
+  adminListStoreProductsSchema,
 } from './store.schema';
 import { Roles } from '@modules/user/user.model';
 
@@ -97,6 +100,34 @@ export default async function storeRoutes(fastify: FastifyInstance): Promise<voi
   // ─── Public: category explorer (must be before /:storeId) ───────────────────
   fastify.get('/categories/explorer', { schema: listStoreCategoryExplorerSchema }, storeController.exploreCategoryExplorer.bind(storeController));
   fastify.get('/categories', { schema: listStoreCategoryExplorerSchema }, storeController.exploreCategoryExplorer.bind(storeController));
+
+  // ─── Admin: store workspace reads (before generic /:storeId) ────────────────
+  fastify.get(
+    '/:storeId/dashboard',
+    {
+      schema: adminGetStoreDashboardSchema,
+      onRequest: [fastify.authenticate, fastify.requireRole(Roles.ADMIN)],
+    },
+    storeController.getAdminStoreDashboard.bind(storeController) as any,
+  );
+
+  fastify.get(
+    '/:storeId/revenue',
+    {
+      schema: adminGetStoreRevenueSchema,
+      onRequest: [fastify.authenticate, fastify.requireRole(Roles.ADMIN)],
+    },
+    storeController.getAdminStoreRevenue.bind(storeController) as any,
+  );
+
+  fastify.get(
+    '/:storeId/manage/products',
+    {
+      schema: adminListStoreProductsSchema,
+      onRequest: [fastify.authenticate, fastify.requireRole(Roles.ADMIN)],
+    },
+    storeController.getAdminStoreProducts.bind(storeController) as any,
+  );
 
   fastify.get('/:storeId', { schema: getStoreSchema, onRequest: [fastify.optionalAuthenticate] }, storeController.getOne.bind(storeController) as any);
   fastify.get('/:storeId/attributes', { schema: getStoreAttributesSchema }, storeController.getStoreAttributes.bind(storeController));

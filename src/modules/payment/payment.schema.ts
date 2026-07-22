@@ -456,3 +456,107 @@ export const adminGetPaymentSchema: FastifySchema = {
     404: errorResponse,
   },
 };
+
+export const adminPaymentsSummarySchema: FastifySchema = {
+  tags: ['Payments — Admin'],
+  summary: 'Payments dashboard summary (admin)',
+  description:
+    'Returns platform payment aggregates for the optional date range, plus live Razorpay settlement snapshot ' +
+    '(last settlement, month totals, Instant Settlement balance when enabled). ' +
+    'Standard Razorpay PG has no public wallet-balance API — `availableBalance` is only populated when Instant Settlements is on.',
+  security: [{ BearerAuth: [] }],
+  querystring: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      from: {
+        type: 'string',
+        description: 'Optional range start (ISO or YYYY-MM-DD). Requires to.',
+      },
+      to: {
+        type: 'string',
+        description: 'Optional range end (ISO or YYYY-MM-DD). Requires from.',
+      },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            period: {
+              type: 'object',
+              properties: {
+                from: { type: ['string', 'null'] },
+                to: { type: ['string', 'null'] },
+              },
+            },
+            platform: {
+              type: 'object',
+              properties: {
+                capturedAmount: { type: 'number' },
+                capturedCount: { type: 'number' },
+                refundRequestedAmount: { type: 'number' },
+                refundRequestedCount: { type: 'number' },
+                refundedAmount: { type: 'number' },
+                refundedCount: { type: 'number' },
+                failedCount: { type: 'number' },
+                pendingCount: { type: 'number' },
+              },
+            },
+            razorpay: {
+              type: 'object',
+              properties: {
+                configured: { type: 'boolean' },
+                lastSettlement: {
+                  type: 'object',
+                  nullable: true,
+                  properties: {
+                    id: { type: 'string' },
+                    amount: { type: 'number' },
+                    fees: { type: 'number' },
+                    tax: { type: 'number' },
+                    utr: { type: ['string', 'null'] },
+                    status: { type: 'string' },
+                    createdAt: { type: 'string' },
+                  },
+                },
+                recentSettlements: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      id: { type: 'string' },
+                      amount: { type: 'number' },
+                      fees: { type: 'number' },
+                      tax: { type: 'number' },
+                      utr: { type: ['string', 'null'] },
+                      status: { type: 'string' },
+                      createdAt: { type: 'string' },
+                    },
+                  },
+                },
+                settlementsThisMonth: {
+                  type: 'object',
+                  properties: {
+                    count: { type: 'number' },
+                    amount: { type: 'number' },
+                  },
+                },
+                availableBalance: { type: ['number', 'null'] },
+                instantSettlementsEnabled: { type: 'boolean' },
+                error: { type: ['string', 'null'] },
+              },
+            },
+          },
+        },
+      },
+    },
+    400: validationErrorResponse,
+    401: errorResponse,
+    403: errorResponse,
+  },
+};

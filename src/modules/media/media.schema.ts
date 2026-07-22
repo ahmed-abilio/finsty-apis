@@ -11,6 +11,7 @@ export type UploadFolder =
   | 'banners'      // promotional / hero banners
   | 'stores'       // vendor / store branding images
   | 'reviews'      // review / feedback images & attachments
+  | 'tickets'      // support ticket attachment images
   | 'documents';   // invoices, receipts, PDFs, spreadsheets
 
 export const UPLOAD_FOLDERS: UploadFolder[] = [
@@ -20,6 +21,7 @@ export const UPLOAD_FOLDERS: UploadFolder[] = [
   'banners',
   'stores',
   'reviews',
+  'tickets',
   'documents',
 ];
 
@@ -59,7 +61,7 @@ export const presignedUploadSchema: FastifySchema = {
     '2. `PUT` the raw file bytes to `uploadUrl` with the matching `Content-Type` header — no auth needed, credentials are embedded in the URL.\n' +
     '3. Pass `publicUrl` to the relevant resource endpoint (e.g. `PATCH /users/me/avatar`) to persist it.\n\n' +
     '**Allowed MIME types by folder:**\n' +
-    '- Image folders (`avatars`, `products`, `categories`, `banners`, `stores`, `reviews`): `image/jpeg`, `image/png`, `image/webp`\n' +
+    '- Image folders (`avatars`, `products`, `categories`, `banners`, `stores`, `reviews`, `tickets`): `image/jpeg`, `image/png`, `image/webp`\n' +
     '- `documents`: all image types + `application/pdf`, `.doc/.docx`, `.xls/.xlsx`, `text/csv`\n\n' +
     'The presigned URL expires after 1 hour (configurable via `S3_PRESIGNED_URL_EXPIRES`).',
   // security: [{ BearerAuth: [] }],
@@ -95,7 +97,7 @@ export const presignedUploadSchema: FastifySchema = {
       },
       folder: {
         type: 'string',
-        enum: ['avatars', 'products', 'categories', 'banners', 'stores', 'reviews', 'documents'],
+        enum: ['avatars', 'products', 'categories', 'banners', 'stores', 'reviews', 'tickets', 'documents'],
         description: [
           'Destination folder under `uploads/`:',
           '- `avatars` — user profile pictures (images only)',
@@ -104,6 +106,7 @@ export const presignedUploadSchema: FastifySchema = {
           '- `banners` — promotional / hero banners (images only)',
           '- `stores` — vendor / store branding images (images only)',
           '- `reviews` — review / feedback images and attachments (images only)',
+          '- `tickets` — support ticket attachment images (images only)',
           '- `documents` — invoices, receipts, PDFs, spreadsheets (images + documents)',
         ].join('\n'),
       },

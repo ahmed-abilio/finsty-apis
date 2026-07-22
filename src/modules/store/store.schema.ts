@@ -928,6 +928,7 @@ export const getMyDashboardSchema: FastifySchema = {
   description:
     'KPI tiles, revenue summary, 7-day sales chart, top 5 products (full catalog shape), and 5 recent orders. ' +
     'Revenue and order metrics use **vendor line items only** (`SUM order_items.total_price`), excluding `pending` and `cancelled` orders. ' +
+    '**RTO %** = returned / (delivered + returned) for the current UTC month. ' +
     'Month tiles compare **current UTC month (1st → now)** vs **previous full UTC month**. ' +
     'Stock counts use summed variant stock: out of stock = total 0; low stock = total > 0 and ≤ `lowStockThreshold`; in stock = total above threshold.',
   security: [{ BearerAuth: [] }],
@@ -954,6 +955,23 @@ export const getMyDashboardSchema: FastifySchema = {
                   properties: {
                     count: { type: 'number', description: 'Distinct orders this month (vendor items)' },
                     changePercent: { type: 'number' },
+                  },
+                },
+                rto: {
+                  type: 'object',
+                  description:
+                    'Return-to-origin rate for this month: returned / (delivered + returned) for store line items.',
+                  properties: {
+                    percent: {
+                      type: 'number',
+                      description: 'RTO % this UTC month (0 when no delivered/returned orders)',
+                    },
+                    returnedCount: { type: 'number' },
+                    deliveredCount: { type: 'number' },
+                    changePercent: {
+                      type: 'number',
+                      description: 'Signed % change vs previous full UTC month RTO rate',
+                    },
                   },
                 },
                 lowStockProducts: dashboardStockTile,
@@ -1143,6 +1161,52 @@ export const getMyProductsSchema: FastifySchema = {
     },
     401: unauthorized,
     404: notFound,
+  },
+};
+
+// ─── Admin: GET /stores/:storeId/dashboard ───────────────────────────────────
+
+export const adminGetStoreDashboardSchema: FastifySchema = {
+  ...getMyDashboardSchema,
+  tags: ['Admin — Stores'],
+  summary: 'Store dashboard (admin)',
+  description:
+    'Same KPI payload as vendor `GET /stores/my/dashboard`, scoped to any store by id. Admin only.',
+  params: {
+    type: 'object',
+    required: ['storeId'],
+    properties: { storeId: { type: 'string', format: 'uuid' } },
+  },
+};
+
+// ─── Admin: GET /stores/:storeId/revenue ─────────────────────────────────────
+
+export const adminGetStoreRevenueSchema: FastifySchema = {
+  ...getMyRevenueSchema,
+  tags: ['Admin — Stores'],
+  summary: 'Store revenue report (admin)',
+  description:
+    'Same revenue payload as vendor `GET /stores/my/revenue`, scoped to any store by id. Admin only.',
+  params: {
+    type: 'object',
+    required: ['storeId'],
+    properties: { storeId: { type: 'string', format: 'uuid' } },
+  },
+};
+
+// ─── Admin: GET /stores/:storeId/manage/products ─────────────────────────────
+
+export const adminListStoreProductsSchema: FastifySchema = {
+  ...getMyProductsSchema,
+  tags: ['Admin — Stores'],
+  summary: 'List store products for management (admin)',
+  description:
+    'Full vendor-style product list (includes inactive) for a store. Admin only. ' +
+    'Filter by active status, stock status, category, subcategory, or search term.',
+  params: {
+    type: 'object',
+    required: ['storeId'],
+    properties: { storeId: { type: 'string', format: 'uuid' } },
   },
 };
 

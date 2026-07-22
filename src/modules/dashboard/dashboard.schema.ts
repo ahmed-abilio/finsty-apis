@@ -14,7 +14,7 @@ const orderStatusEnum = [
 const dashboardStatSchema = {
   type: 'object',
   properties: {
-    id: { type: 'string', enum: ['orders', 'revenue', 'new-users', 'new-stores'] },
+    id: { type: 'string', enum: ['orders', 'revenue', 'aov', 'fulfillment-rate', 'new-users', 'new-stores'] },
     label: { type: 'string' },
     value: { type: 'number' },
     change: { type: 'number', description: 'Percent change vs previous equal-length period' },
@@ -67,7 +67,8 @@ export const getAdminDashboardSchema = {
   tags: ['Admin dashboard'],
   summary: 'Admin platform dashboard',
   description:
-    'KPI stats, payment and order status breakdown, and recent activity for the selected date range. ' +
+    'KPI stats (orders, revenue, AOV, fulfillment rate, new users, new stores), payment and order status breakdown, and recent activity for the selected date range. ' +
+    'AOV = captured revenue / orders. Fulfillment rate = delivered / (delivered + cancelled + returned). ' +
     'Defaults to the last 30 days when from/to are omitted.',
   querystring: {
     type: 'object',
@@ -106,6 +107,62 @@ export const getAdminDashboardSchema = {
               },
             },
             recentActivity: { type: 'array', items: activitySchema },
+          },
+        },
+      },
+    },
+  },
+};
+
+export const getAdminDeliveryAnalyticsSchema = {
+  tags: ['Admin dashboard'],
+  summary: 'Delivery analytics by pincode',
+  description:
+    'Orders by delivery pincode cluster with average delivery time (createdAt → deliveredAt). ' +
+    'Includes only delivery orders with status delivered and a non-empty address postal code. ' +
+    'Defaults to the last 30 days when from/to are omitted.',
+  querystring: {
+    type: 'object',
+    properties: {
+      from: { type: 'string', description: 'Start date (ISO or YYYY-MM-DD). Defaults with to to last 30 days.' },
+      to: { type: 'string', description: 'End date (ISO or YYYY-MM-DD). Defaults with from to last 30 days.' },
+    },
+  },
+  response: {
+    200: {
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            period: {
+              type: 'object',
+              properties: {
+                from: { type: 'string', format: 'date-time' },
+                to: { type: 'string', format: 'date-time' },
+              },
+            },
+            summary: {
+              type: 'object',
+              properties: {
+                totalDeliveredOrders: { type: 'number' },
+                pincodeCount: { type: 'number' },
+                avgDeliveryHours: { type: ['number', 'null'] },
+              },
+            },
+            clusters: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  pincode: { type: 'string' },
+                  orderCount: { type: 'number' },
+                  avgDeliveryHours: { type: ['number', 'null'] },
+                  avgDeliveryMinutes: { type: ['number', 'null'] },
+                },
+              },
+            },
           },
         },
       },

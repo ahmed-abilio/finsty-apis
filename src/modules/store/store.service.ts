@@ -741,6 +741,11 @@ class StoreService {
 
   async getMyProducts(ownerId: string, query: VendorProductQuery) {
     const store = await this.findByOwner(ownerId);
+    return this.listStoreProductsForManagement(store.id, query);
+  }
+
+  async listStoreProductsForManagement(storeId: string, query: VendorProductQuery) {
+    await this.findById(storeId, true);
 
     const {
       isActive,
@@ -753,7 +758,7 @@ class StoreService {
     } = query;
 
     const offset = (page - 1) * limit;
-    const filters: WhereOptions[] = [{ storeId: store.id }];
+    const filters: WhereOptions[] = [{ storeId }];
 
     if (isActive !== undefined) filters.push({ isActive });
     if (stockStatus) filters.push(stockStatusWhere(stockStatus));
@@ -801,6 +806,14 @@ class StoreService {
     return vendorDashboardService.getDashboard(store.id, ownerId);
   }
 
+  async getStoreDashboard(storeId: string) {
+    const store = await this.findById(storeId, true);
+    if (!store.ownerId) {
+      throw AppError.badRequest('Store has no owner', 'STORE_NO_OWNER');
+    }
+    return vendorDashboardService.getDashboard(store.id, store.ownerId);
+  }
+
   async getVendorRevenue(
     ownerId: string,
     range: DateRange,
@@ -811,6 +824,21 @@ class StoreService {
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(100, Math.max(1, limit));
     return vendorRevenueService.getRevenue(store.id, ownerId, range, safePage, safeLimit);
+  }
+
+  async getStoreRevenue(
+    storeId: string,
+    range: DateRange,
+    page = 1,
+    limit = 20,
+  ) {
+    const store = await this.findById(storeId, true);
+    if (!store.ownerId) {
+      throw AppError.badRequest('Store has no owner', 'STORE_NO_OWNER');
+    }
+    const safePage = Math.max(1, page);
+    const safeLimit = Math.min(100, Math.max(1, limit));
+    return vendorRevenueService.getRevenue(store.id, store.ownerId, range, safePage, safeLimit);
   }
 
   async getCategoryExplorer(query: CategoryExplorerQuery) {

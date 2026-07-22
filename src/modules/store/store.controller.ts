@@ -227,6 +227,48 @@ class StoreController {
     void reply.status(200).send({ success: true, data });
   }
 
+  async getAdminStoreDashboard(
+    request: FastifyRequest<{ Params: StoreParams }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const data = await storeService.getStoreDashboard(request.params.storeId);
+    void reply.status(200).send({ success: true, data });
+  }
+
+  async getAdminStoreProducts(
+    request: FastifyRequest<{ Params: StoreParams; Querystring: VendorProductQuery }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const result = await storeService.listStoreProductsForManagement(
+      request.params.storeId,
+      request.query,
+    );
+    void reply.status(200).send({ success: true, data: result });
+  }
+
+  async getAdminStoreRevenue(
+    request: FastifyRequest<{ Params: StoreParams; Querystring: VendorRevenueQuery }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const { from, to, page, limit } = request.query;
+    if (!from || !to) {
+      throw AppError.badRequest('from and to are required ISO timestamps', 'INVALID_DATE_RANGE');
+    }
+    let range;
+    try {
+      range = parseRevenueDateRange(from, to);
+    } catch (err) {
+      const code = (err as Error).message === 'INVALID_RANGE' ? 'INVALID_DATE_RANGE' : 'INVALID_DATE';
+      const message =
+        (err as Error).message === 'INVALID_RANGE'
+          ? 'to must be greater than or equal to from'
+          : 'from and to must be valid ISO timestamps';
+      throw AppError.badRequest(message, code);
+    }
+    const data = await storeService.getStoreRevenue(request.params.storeId, range, page, limit);
+    void reply.status(200).send({ success: true, data });
+  }
+
   async getStoreAttributes(
     request: FastifyRequest<{ Params: StoreParams }>,
     reply: FastifyReply,

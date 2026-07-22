@@ -37,7 +37,7 @@ describe('shadowfaxDispatchReady.service', () => {
     const body = { shipment_ready_timestamp: '2022-09-14T17:50:00Z' };
     const result = await markShadowfaxDispatchReadyForFinstyOrder('order-1', body);
 
-    expect(markDispatchReady).toHaveBeenCalledWith('order-1', body);
+    expect(markDispatchReady).toHaveBeenCalledWith('9260127', body);
     expect(result).toEqual({ message: 'ok' });
   });
 

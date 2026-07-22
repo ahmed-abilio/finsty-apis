@@ -3,6 +3,7 @@ import sequelize from '@config/database';
 import User from '@modules/user/user.model';
 import Store from '@modules/store/store.model';
 import { VendorRoleUser } from '@modules/user/role-user.model';
+import { normalizeTicketImageUrls } from './ticketImageUrls';
 
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
@@ -24,7 +25,7 @@ export interface TicketAttributes {
   raisedById: string;
   storeId: string | null;
   description: string;
-  imageUrl: string | null;
+  imageUrl: string[] | null;
   status: TicketStatus;
   type: TicketType;
   createdAt?: Date;
@@ -41,7 +42,7 @@ class Ticket extends Model<TicketAttributes, TicketCreationAttributes> implement
   declare raisedById: string;
   declare storeId: string | null;
   declare description: string;
-  declare imageUrl: string | null;
+  declare imageUrl: string[] | null;
   declare status: TicketStatus;
   declare type: TicketType;
   declare readonly createdAt: Date;
@@ -49,12 +50,14 @@ class Ticket extends Model<TicketAttributes, TicketCreationAttributes> implement
 
   toPublicJSON(): any {
     const raw = (this as any).dataValues || {};
+    const rawImageUrl = this.imageUrl ?? raw.imageUrl ?? raw.image_url ?? null;
+
     return {
       id: this.id || raw.id || '',
       raisedById: this.raisedById || raw.raisedById || raw.raised_by_id || '',
       storeId: this.storeId ?? raw.storeId ?? raw.store_id ?? null,
       description: this.description || raw.description || '',
-      imageUrl: this.imageUrl ?? raw.imageUrl ?? raw.image_url ?? null,
+      imageUrl: normalizeTicketImageUrls(rawImageUrl),
       status: this.status || raw.status || 'PENDING',
       type: this.type || raw.type || '',
       createdAt: (this.createdAt || raw.createdAt)
@@ -91,9 +94,16 @@ Ticket.init(
       allowNull: false,
     },
     imageUrl: {
-      type: DataTypes.STRING(500),
+      type: DataTypes.JSONB,
       allowNull: true,
       field: 'image_url',
+      defaultValue: null,
+      get() {
+        return normalizeTicketImageUrls(this.getDataValue('imageUrl'));
+      },
+      set(value: unknown) {
+        this.setDataValue('imageUrl', normalizeTicketImageUrls(value));
+      },
     },
     status: {
       type: DataTypes.ENUM(...Object.values(TicketStatus)),

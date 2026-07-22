@@ -21,7 +21,7 @@ const PAYMENT_STATUSES: PaymentStatus[] = [
 ];
 
 export interface DashboardStat {
-  id: 'orders' | 'revenue' | 'new-users' | 'new-stores';
+  id: 'orders' | 'revenue' | 'aov' | 'fulfillment-rate' | 'new-users' | 'new-stores';
   label: string;
   value: number;
   change: number;
@@ -70,6 +70,23 @@ export interface AdminDashboardData {
   recentActivity: DashboardActivityItem[];
 }
 
+export interface DeliveryAnalyticsCluster {
+  pincode: string;
+  orderCount: number;
+  avgDeliveryHours: number | null;
+  avgDeliveryMinutes: number | null;
+}
+
+export interface DeliveryAnalyticsData {
+  period: { from: string; to: string };
+  summary: {
+    totalDeliveredOrders: number;
+    pincodeCount: number;
+    avgDeliveryHours: number | null;
+  };
+  clusters: DeliveryAnalyticsCluster[];
+}
+
 async function countOrders(range: DateRange): Promise<number> {
   const rows = await sequelize.query<{ count: string }>(
     `SELECT COUNT(*) AS count FROM orders
@@ -77,6 +94,42 @@ async function countOrders(range: DateRange): Promise<number> {
     { replacements: { start: range.start, end: range.end }, type: QueryTypes.SELECT },
   );
   return Number(rows[0]?.count ?? 0);
+}
+
+async function countOrdersByStatuses(
+  range: DateRange,
+  statuses: readonly string[],
+): Promise<number> {
+  const rows = await sequelize.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM orders
+     WHERE status IN (:statuses)
+       AND "createdAt" >= :start AND "createdAt" <= :end`,
+    {
+      replacements: { statuses: [...statuses], start: range.start, end: range.end },
+      type: QueryTypes.SELECT,
+    },
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** AOV = captured revenue / order count (0 when no orders). */
+function computeAov(revenue: number, orderCount: number): number {
+  if (orderCount <= 0) return 0;
+  return parseFloat((revenue / orderCount).toFixed(2));
+}
+
+/**
+ * Fulfillment rate = delivered / (delivered + cancelled + returned) * 100.
+ * 0 when no terminal outcomes in range.
+ */
+function computeFulfillmentRate(
+  delivered: number,
+  cancelled: number,
+  returned: number,
+): number {
+  const denom = delivered + cancelled + returned;
+  if (denom <= 0) return 0;
+  return parseFloat(((delivered / denom) * 100).toFixed(2));
 }
 
 async function sumCapturedRevenue(range: DateRange): Promise<number> {
@@ -258,6 +311,12 @@ class DashboardService {
       ordersPrevious,
       revenueCurrent,
       revenuePrevious,
+      deliveredCurrent,
+      cancelledCurrent,
+      returnedCurrent,
+      deliveredPrevious,
+      cancelledPrevious,
+      returnedPrevious,
       usersCurrent,
       usersPrevious,
       storesCurrent,
@@ -271,6 +330,12 @@ class DashboardService {
       countOrders(previous),
       sumCapturedRevenue(range),
       sumCapturedRevenue(previous),
+      countOrdersByStatuses(range, ['delivered']),
+      countOrdersByStatuses(range, ['cancelled']),
+      countOrdersByStatuses(range, ['returned']),
+      countOrdersByStatuses(previous, ['delivered']),
+      countOrdersByStatuses(previous, ['cancelled']),
+      countOrdersByStatuses(previous, ['returned']),
       countNewUsers(range),
       countNewUsers(previous),
       countNewStores(range),
@@ -281,6 +346,19 @@ class DashboardService {
       fetchRecentActivity(),
     ]);
 
+    const aovCurrent = computeAov(revenueCurrent, ordersCurrent);
+    const aovPrevious = computeAov(revenuePrevious, ordersPrevious);
+    const fulfillmentCurrent = computeFulfillmentRate(
+      deliveredCurrent,
+      cancelledCurrent,
+      returnedCurrent,
+    );
+    const fulfillmentPrevious = computeFulfillmentRate(
+      deliveredPrevious,
+      cancelledPrevious,
+      returnedPrevious,
+    );
+
     return {
       range: {
         from: range.start.toISOString(),
@@ -289,6 +367,8 @@ class DashboardService {
       stats: [
         buildStat('orders', 'Orders', ordersCurrent, ordersPrevious),
         buildStat('revenue', 'Revenue', revenueCurrent, revenuePrevious),
+        buildStat('aov', 'AOV', aovCurrent, aovPrevious),
+        buildStat('fulfillment-rate', 'Fulfillment rate', fulfillmentCurrent, fulfillmentPrevious),
         buildStat('new-users', 'New Users', usersCurrent, usersPrevious),
         buildStat('new-stores', 'New Stores', storesCurrent, storesPrevious),
       ],
@@ -300,6 +380,72 @@ class DashboardService {
         summary: orderSummary,
       },
       recentActivity,
+    };
+  }
+
+  async getDeliveryAnalytics(range: DateRange): Promise<DeliveryAnalyticsData> {
+    const rows = await sequelize.query<{
+      pincode: string;
+      order_count: string;
+      avg_delivery_hours: string | null;
+    }>(
+      `SELECT
+         a.postal_code AS pincode,
+         COUNT(DISTINCT o.id)::text AS order_count,
+         AVG(EXTRACT(EPOCH FROM (o.delivered_at - o."createdAt")) / 3600.0) AS avg_delivery_hours
+       FROM orders o
+       INNER JOIN addresses a ON a.id = o.address_id
+       WHERE o.delivery_type = 'delivery'
+         AND o.status = 'delivered'
+         AND o.delivered_at IS NOT NULL
+         AND a.postal_code IS NOT NULL
+         AND TRIM(a.postal_code) <> ''
+         AND o."createdAt" >= :start
+         AND o."createdAt" <= :end
+       GROUP BY a.postal_code
+       ORDER BY COUNT(DISTINCT o.id) DESC, a.postal_code ASC`,
+      {
+        replacements: { start: range.start, end: range.end },
+        type: QueryTypes.SELECT,
+      },
+    );
+
+    const clusters: DeliveryAnalyticsCluster[] = rows.map((row) => {
+      const orderCount = Number(row.order_count) || 0;
+      const avgHours =
+        row.avg_delivery_hours == null || Number.isNaN(Number(row.avg_delivery_hours))
+          ? null
+          : parseFloat(Number(row.avg_delivery_hours).toFixed(2));
+      return {
+        pincode: row.pincode,
+        orderCount,
+        avgDeliveryHours: avgHours,
+        avgDeliveryMinutes:
+          avgHours == null ? null : parseFloat((avgHours * 60).toFixed(1)),
+      };
+    });
+
+    const totalDeliveredOrders = clusters.reduce((sum, c) => sum + c.orderCount, 0);
+    let weightedHours = 0;
+    let weight = 0;
+    for (const c of clusters) {
+      if (c.avgDeliveryHours != null && c.orderCount > 0) {
+        weightedHours += c.avgDeliveryHours * c.orderCount;
+        weight += c.orderCount;
+      }
+    }
+
+    return {
+      period: {
+        from: range.start.toISOString(),
+        to: range.end.toISOString(),
+      },
+      summary: {
+        totalDeliveredOrders,
+        pincodeCount: clusters.length,
+        avgDeliveryHours: weight > 0 ? parseFloat((weightedHours / weight).toFixed(2)) : null,
+      },
+      clusters,
     };
   }
 }

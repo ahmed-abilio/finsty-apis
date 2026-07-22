@@ -3,6 +3,7 @@ import { parseRevenueDateRange } from '@modules/store/vendorDashboard.utils';
 import { AppError } from '@utils/appError';
 import { Roles } from '@modules/user/user.model';
 import orderService, { CreateOrderInput } from './order.service';
+import { buildOrderInvoicePdf } from './orderInvoice.service';
 
 interface OrderParams {
   orderId: string;
@@ -195,6 +196,18 @@ class OrderController {
   ): Promise<void> {
     const order = await orderService.getByIdForAdmin(request.params.orderId);
     void reply.status(200).send({ success: true, data: { order } });
+  }
+
+  async adminDownloadInvoice(
+    request: FastifyRequest<{ Params: OrderParams }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const { buffer, filename } = await buildOrderInvoicePdf(request.params.orderId);
+    void reply
+      .status(200)
+      .header('Content-Type', 'application/pdf')
+      .header('Content-Disposition', `attachment; filename="${filename}"`)
+      .send(buffer);
   }
 
   async vendorAcceptOrder(

@@ -13,6 +13,7 @@ import {
   adminUpdateStatusSchema,
   adminListOrdersSchema,
   adminGetOrderSchema,
+  adminDownloadOrderInvoiceSchema,
   vendorGetOrderSchema,
   vendorAcceptOrderSchema,
   vendorDispatchReadySchema,
@@ -162,6 +163,13 @@ export async function adminOrderRoutes(fastify: FastifyInstance): Promise<void> 
     '/',
     { schema: adminListOrdersSchema },
     orderController.adminList.bind(orderController) as any,
+  );
+
+  // Register before /:orderId so `/invoice` is not swallowed as an id segment.
+  fastify.get<{ Params: { orderId: string } }>(
+    '/:orderId/invoice',
+    { schema: adminDownloadOrderInvoiceSchema },
+    orderController.adminDownloadInvoice.bind(orderController) as any,
   );
 
   fastify.get<{ Params: { orderId: string } }>(

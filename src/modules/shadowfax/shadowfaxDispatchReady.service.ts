@@ -32,14 +32,13 @@ export async function markShadowfaxDispatchReadyForFinstyOrder(
     );
   }
 
-  const placed = await resolvePlacedShadowfaxOrderId(orderId);
-  if (!placed) {
+  const placedShadowfaxOrderId = await resolvePlacedShadowfaxOrderId(orderId);
+  if (!placedShadowfaxOrderId) {
     throw AppError.conflict(
       'Shadowfax delivery has not been placed yet. Try again shortly after payment is confirmed.',
       'SHADOWFAX_ORDER_NOT_PLACED',
     );
   }
 
-  // Shadowfax dispatch-ready URL uses client_order_id (Finsty order UUID), not sfx_order_id.
-  return shadowfaxClient.markDispatchReady(orderId, body);
+  return shadowfaxClient.markDispatchReady(placedShadowfaxOrderId, body);
 }

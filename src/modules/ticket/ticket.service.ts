@@ -3,13 +3,14 @@ import Store from '@modules/store/store.model';
 import User from '@modules/user/user.model';
 import { VendorRoleUser } from '@modules/user/role-user.model';
 import { AppError } from '@utils/appError';
+import { normalizeTicketImageUrls } from './ticketImageUrls';
 
 // ─── Input types ──────────────────────────────────────────────────────────────
 
 export interface CreateTicketInput {
   storeId?: string;
   description: string;
-  imageUrl?: string;
+  imageUrl?: string[] | string | null;
   type: TicketType;
 }
 
@@ -89,11 +90,13 @@ class TicketService {
       }
     }
 
+    const imageUrl = normalizeTicketImageUrls(input.imageUrl);
+
     const ticket = await Ticket.create({
       raisedById,
       storeId: input.type === TicketType.USER_TO_STORE ? input.storeId! : null,
       description: input.description,
-      imageUrl: input.imageUrl ?? null,
+      imageUrl,
       type: input.type,
     });
 

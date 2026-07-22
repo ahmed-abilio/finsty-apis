@@ -24,6 +24,8 @@ describe('shadowfax.config URLs (env only)', () => {
     delete process.env.SHADOWFAX_SERVICEABILITY_URL;
     delete process.env.SHADOWFAX_PLACE_ORDER_URL;
     delete process.env.SHADOWFAX_ORDER_STATUS_URL;
+    delete process.env.SHADOWFAX_DISPATCH_READY_URL;
+    delete process.env.SHADOWFAX_API_DISPATCH_READY_URL;
     delete process.env.SHADOWFAX_BASE_URL;
     delete process.env.SHADOWFAX_V2_BASE_URL;
   });
@@ -59,20 +61,25 @@ describe('shadowfax.config URLs (env only)', () => {
     expect(getCancelOrderUrl('21039906')).toBe(`${PROXY_BASE}/api/v2/orders/21039906/cancel/`);
   });
 
-  it('getDispatchReadyUrl uses SHADOWFAX_DISPATCH_READY_URL when set', () => {
+  it('getDispatchReadyUrl uses SHADOWFAX_API_DISPATCH_READY_URL when set', () => {
     setShadowfaxEnv();
-    process.env.SHADOWFAX_DISPATCH_READY_URL = `${PROXY_BASE}/api/v2/orders/{id}/dispatch-ready/`;
-    expect(getDispatchReadyUrl('a124ce11-585c-4c6f-b679-03d8a0835e9a')).toBe(
-      `${PROXY_BASE}/api/v2/orders/a124ce11-585c-4c6f-b679-03d8a0835e9a/dispatch-ready/`,
+    process.env.SHADOWFAX_API_DISPATCH_READY_URL = `${PROXY_BASE}/api/v2/orders/{id}/dispatch-ready/`;
+    expect(getDispatchReadyUrl('9260127')).toBe(
+      `${PROXY_BASE}/api/v2/orders/9260127/dispatch-ready/`,
     );
   });
 
-  it('getDispatchReadyUrl derives from SHADOWFAX_ORDER_STATUS_URL when dispatch-ready URL is unset', () => {
+  it('getDispatchReadyUrl uses legacy SHADOWFAX_DISPATCH_READY_URL when set', () => {
     setShadowfaxEnv();
+    process.env.SHADOWFAX_DISPATCH_READY_URL = `${PROXY_BASE}/api/v2/orders/{id}/dispatch-ready/`;
+    expect(getDispatchReadyUrl('9260127')).toBe(`${PROXY_BASE}/api/v2/orders/9260127/dispatch-ready/`);
+  });
+
+  it('getDispatchReadyUrl derives from SHADOWFAX_ORDER_STATUS_URL when dispatch-ready URLs are unset', () => {
+    setShadowfaxEnv();
+    delete process.env.SHADOWFAX_API_DISPATCH_READY_URL;
     delete process.env.SHADOWFAX_DISPATCH_READY_URL;
-    expect(getDispatchReadyUrl('a124ce11-585c-4c6f-b679-03d8a0835e9a')).toBe(
-      `${PROXY_BASE}/api/v2/orders/a124ce11-585c-4c6f-b679-03d8a0835e9a/dispatch-ready/`,
-    );
+    expect(getDispatchReadyUrl('9260127')).toBe(`${PROXY_BASE}/api/v2/orders/9260127/dispatch-ready/`);
   });
 
   it('throws when SHADOWFAX_PLACE_ORDER_URL is missing', () => {

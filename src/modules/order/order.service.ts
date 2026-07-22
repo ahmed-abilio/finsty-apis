@@ -1835,9 +1835,18 @@ class OrderService {
       ...historyEvents,
     ];
 
+    const storesById = new Map<string, Record<string, unknown>>();
+    for (const item of items) {
+      const store = (item as { store?: Record<string, unknown> | null }).store;
+      if (store?.id && typeof store.id === 'string' && !storesById.has(store.id)) {
+        storesById.set(store.id, store);
+      }
+    }
+
     return {
       ...publicOrder,
       items,
+      stores: [...storesById.values()],
       address: address ? address.toPublicJSON() : null,
       paymentType: capturedPayment?.paymentType ?? null,
       walletAmountPaid,

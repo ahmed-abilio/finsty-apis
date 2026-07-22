@@ -27,6 +27,20 @@ describe('sanitizeCmsHtml', () => {
     expect(out).toContain('color:#0066cc');
   });
 
+  it('preserves tel and sms href schemes on links', () => {
+    const telInput =
+      '<a href="tel:+919000000000" style="color:#0066cc;font-size:16px;font-weight:bold;text-decoration:none" rel="noopener noreferrer">+91 90000 00000</a>';
+    const smsInput = '<a href="sms:+919000000000">Text us</a>';
+
+    const telOut = sanitizeCmsHtml(telInput);
+    const smsOut = sanitizeCmsHtml(smsInput);
+
+    expect(telOut).toContain('href="tel:+919000000000"');
+    expect(telOut).toContain('color:#0066cc');
+    expect(telOut).toContain('+91 90000 00000');
+    expect(smsOut).toContain('href="sms:+919000000000"');
+  });
+
   it('strips script tags and dangerous style values', () => {
     const input =
       '<div style="width:expression(alert(1))">x</div><script>alert(1)</script><p onclick="evil()">y</p>';

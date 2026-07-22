@@ -104,6 +104,8 @@ function generateReferralCode(): string {
 
 export interface UpdateUserInput {
   name?: string;
+  email?: string;
+  phone?: string;
   profileImage?: string;
 }
 
@@ -271,9 +273,31 @@ class UserService {
   async update(id: string, input: UpdateUserInput, role: Roles = Roles.USER): Promise<User> {
     const user = await this.findByIdForRole(id, { role });
 
-    const updates: Partial<{ name: string | null; profileImage: string | null }> = {};
+    const updates: Partial<{
+      name: string | null;
+      email: string | null;
+      phone: string | null;
+      firebaseUid: string;
+      profileImage: string | null;
+    }> = {};
     if (input.name !== undefined) updates.name = input.name;
+    if (input.email !== undefined) updates.email = input.email;
     if (input.profileImage !== undefined) updates.profileImage = input.profileImage;
+
+    if (input.phone !== undefined) {
+      const nextPhone = input.phone;
+      if (user.provider === 'phone' && nextPhone !== user.phone) {
+        const conflict = await this.findByFirebaseUidForRole(nextPhone, { role });
+        if (conflict && conflict.id !== user.id) {
+          throw AppError.conflict(
+            'This phone number is already linked to another account',
+            'PHONE_ALREADY_IN_USE',
+          );
+        }
+        updates.firebaseUid = nextPhone;
+      }
+      updates.phone = nextPhone;
+    }
 
     if (Object.keys(updates).length > 0) {
       await user.update(updates);

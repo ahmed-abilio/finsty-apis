@@ -7,6 +7,8 @@ import { registerDeviceToken } from '@modules/notification/notification.service'
 
 interface UpdateMeBody {
   name?: string;
+  email?: string;
+  phone?: string;
   profileImage?: string;
 }
 

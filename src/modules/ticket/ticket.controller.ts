@@ -10,7 +10,7 @@ import { AppError } from '@utils/appError';
 interface CreateTicketBody {
   storeId?: string;
   description: string;
-  imageUrl?: string;
+  imageUrl?: string[];
 }
 
 interface TicketParams {

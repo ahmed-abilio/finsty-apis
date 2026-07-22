@@ -70,14 +70,16 @@ export function getCancelOrderUrl(shadowfaxOrderId: string): string {
   );
 }
 
-/** PUT target for Shadowfax HL marketplace dispatch-ready (v2). Template must include `{id}` (client_order_id). */
-export function getDispatchReadyUrl(clientOrderId: string): string {
-  const explicit = process.env.SHADOWFAX_DISPATCH_READY_URL?.trim();
+/** PUT target for Shadowfax HL marketplace dispatch-ready (v2). Template must include `{id}`. */
+export function getDispatchReadyUrl(dispatchReadyOrderId: string): string {
+  const explicit =
+    process.env.SHADOWFAX_API_DISPATCH_READY_URL?.trim() ??
+    process.env.SHADOWFAX_DISPATCH_READY_URL?.trim();
   if (explicit) {
     return buildShadowfaxOrderIdUrl(
-      'SHADOWFAX_DISPATCH_READY_URL',
-      clientOrderId,
-      'SHADOWFAX_DISPATCH_READY_URL must include {id} for the Shadowfax client order id.',
+      'SHADOWFAX_API_DISPATCH_READY_URL',
+      dispatchReadyOrderId,
+      'SHADOWFAX_API_DISPATCH_READY_URL must include {id} for the Shadowfax dispatch-ready order id.',
       explicit,
     );
   }
@@ -87,14 +89,14 @@ export function getDispatchReadyUrl(clientOrderId: string): string {
     const dispatchReadyTemplate = statusTemplate.replace(/\/status\/?$/i, '/dispatch-ready/');
     return buildShadowfaxOrderIdUrl(
       'SHADOWFAX_ORDER_STATUS_URL',
-      clientOrderId,
-      'SHADOWFAX_ORDER_STATUS_URL must include {id} for the Shadowfax client order id.',
+      dispatchReadyOrderId,
+      'SHADOWFAX_ORDER_STATUS_URL must include {id} for the Shadowfax dispatch-ready order id.',
       dispatchReadyTemplate,
     );
   }
 
   throw AppError.internal(
-    'Shadowfax dispatch-ready URL is not configured. Set SHADOWFAX_DISPATCH_READY_URL or SHADOWFAX_ORDER_STATUS_URL with {id}.',
+    'Shadowfax dispatch-ready URL is not configured. Set SHADOWFAX_API_DISPATCH_READY_URL, SHADOWFAX_DISPATCH_READY_URL, or SHADOWFAX_ORDER_STATUS_URL with {id}.',
     'SHADOWFAX_CONFIG_INVALID',
   );
 }

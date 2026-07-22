@@ -28,6 +28,7 @@ import { buildOrderRefWhere } from '@modules/order/orderRef';
 import { transitionOrderStatus } from '@modules/shadowfax/tracking/order-status-transition.service';
 import userService from '@modules/user/user.service';
 import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
+import razorpayAccountService from './razorpayAccount.service';
 
 // ─── State machine: valid transitions ─────────────────────────────────────────
 
@@ -958,6 +959,72 @@ class PaymentService {
     notifyPaymentCancelled(userId, orderId);
 
     return { paymentsFailed };
+  }
+
+  // ─── Admin Razorpay + platform summary ─────────────────────────────────────
+
+  async getAdminPaymentsSummary(filters: { from?: string; to?: string } = {}) {
+    let createdAtFilter: { [Op.gte]?: Date; [Op.lte]?: Date } | undefined;
+    if (filters.from || filters.to) {
+      if (!filters.from || !filters.to) {
+        throw AppError.badRequest(
+          'Both from and to are required when filtering by date',
+          'INVALID_DATE_RANGE',
+        );
+      }
+      createdAtFilter = {
+        [Op.gte]: normalizeRangeStart(filters.from),
+        [Op.lte]: normalizeRangeEnd(filters.to),
+      };
+    }
+
+    const whereClause = createdAtFilter ? { createdAt: createdAtFilter } : {};
+
+    const [statusRows, razorpay] = await Promise.all([
+      Payment.findAll({
+        attributes: [
+          'status',
+          [sequelize.fn('COUNT', sequelize.col('id')), 'count'],
+          [sequelize.fn('COALESCE', sequelize.fn('SUM', sequelize.col('amount')), 0), 'amount'],
+        ],
+        where: whereClause,
+        group: ['status'],
+        raw: true,
+      }) as unknown as Promise<Array<{ status: PaymentStatus; count: string; amount: string }>>,
+      razorpayAccountService.getAccountSnapshot(),
+    ]);
+
+    const byStatus = Object.fromEntries(
+      statusRows.map((row) => [
+        row.status,
+        { count: Number(row.count ?? 0), amount: Number(row.amount ?? 0) },
+      ]),
+    ) as Partial<Record<PaymentStatus, { count: number; amount: number }>>;
+
+    const zero = { count: 0, amount: 0 };
+    const captured = byStatus.captured ?? zero;
+    const refundRequested = byStatus.refund_requested ?? zero;
+    const failed = byStatus.failed ?? zero;
+    const pending = byStatus.pending ?? zero;
+    const refunded = byStatus.refunded ?? zero;
+
+    return {
+      period: {
+        from: filters.from ?? null,
+        to: filters.to ?? null,
+      },
+      platform: {
+        capturedAmount: captured.amount,
+        capturedCount: captured.count,
+        refundRequestedAmount: refundRequested.amount,
+        refundRequestedCount: refundRequested.count,
+        refundedAmount: refunded.amount,
+        refundedCount: refunded.count,
+        failedCount: failed.count,
+        pendingCount: pending.count,
+      },
+      razorpay,
+    };
   }
 
   // ─── Get config ────────────────────────────────────────────────────────────

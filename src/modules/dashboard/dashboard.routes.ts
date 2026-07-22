@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { Roles } from '@modules/user/user.model';
 import dashboardController, { type DashboardQuery } from './dashboard.controller';
-import { getAdminDashboardSchema } from './dashboard.schema';
+import { getAdminDashboardSchema, getAdminDeliveryAnalyticsSchema } from './dashboard.schema';
 
 export default async function adminDashboardRoutes(fastify: FastifyInstance): Promise<void> {
   fastify.addHook('onRequest', fastify.authenticate);
@@ -11,5 +11,16 @@ export default async function adminDashboardRoutes(fastify: FastifyInstance): Pr
     '/',
     { schema: getAdminDashboardSchema },
     dashboardController.getDashboard.bind(dashboardController),
+  );
+}
+
+export async function adminDeliveryAnalyticsRoutes(fastify: FastifyInstance): Promise<void> {
+  fastify.addHook('onRequest', fastify.authenticate);
+  fastify.addHook('onRequest', fastify.requireRole(Roles.ADMIN));
+
+  fastify.get<{ Querystring: DashboardQuery }>(
+    '/',
+    { schema: getAdminDeliveryAnalyticsSchema },
+    dashboardController.getDeliveryAnalytics.bind(dashboardController),
   );
 }

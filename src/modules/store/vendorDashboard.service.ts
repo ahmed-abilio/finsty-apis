@@ -40,6 +40,40 @@ async function countDistinctOrders(storeId: string, range: DateRange): Promise<n
   return Number(rows[0]?.count ?? 0);
 }
 
+async function countDistinctOrdersByStatus(
+  storeId: string,
+  range: DateRange,
+  statuses: readonly string[],
+): Promise<number> {
+  const rows = await sequelize.query<{ count: string }>(
+    `SELECT COUNT(DISTINCT o.id) AS count
+     FROM orders o
+     INNER JOIN order_items oi ON oi.order_id = o.id
+     INNER JOIN products p ON p.id = oi.product_id
+     WHERE p.store_id = :storeId
+       AND o.status IN (:statuses)
+       AND o."createdAt" >= :start
+       AND o."createdAt" <= :end`,
+    {
+      replacements: {
+        storeId,
+        statuses: [...statuses],
+        start: range.start,
+        end: range.end,
+      },
+      type: QueryTypes.SELECT,
+    },
+  );
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** RTO % = returned / (delivered + returned). Zero when no terminal outcomes. */
+function computeRtoPercent(returnedCount: number, deliveredCount: number): number {
+  const denom = returnedCount + deliveredCount;
+  if (denom === 0) return 0;
+  return parseFloat(((returnedCount / denom) * 100).toFixed(2));
+}
+
 export interface VendorDashboardData {
   tiles: {
     products: {
@@ -47,6 +81,12 @@ export interface VendorDashboardData {
       revenue: { current: number; previous: number; changePercent: number };
     };
     orders: { count: number; changePercent: number };
+    rto: {
+      percent: number;
+      returnedCount: number;
+      deliveredCount: number;
+      changePercent: number;
+    };
     lowStockProducts: { count: number };
     outOfStockProducts: { count: number };
   };
@@ -76,6 +116,10 @@ class VendorDashboardService {
       revenuePreviousMonth,
       ordersCurrentMonth,
       ordersPreviousMonth,
+      returnedCurrentMonth,
+      deliveredCurrentMonth,
+      returnedPreviousMonth,
+      deliveredPreviousMonth,
       lastMonthRevenue,
       monthBeforePreviousRevenue,
       salesAnalyticsRows,
@@ -89,6 +133,10 @@ class VendorDashboardService {
       sumLineItemRevenue(storeId, previousMonth),
       countDistinctOrders(storeId, currentMonth),
       countDistinctOrders(storeId, previousMonth),
+      countDistinctOrdersByStatus(storeId, currentMonth, ['returned']),
+      countDistinctOrdersByStatus(storeId, currentMonth, ['delivered']),
+      countDistinctOrdersByStatus(storeId, previousMonth, ['returned']),
+      countDistinctOrdersByStatus(storeId, previousMonth, ['delivered']),
       sumLineItemRevenue(storeId, previousMonth),
       sumLineItemRevenue(storeId, monthBeforePrevious),
       Promise.all(
@@ -103,6 +151,8 @@ class VendorDashboardService {
     ]);
 
     const topProducts = await this.loadTopProductDetails(storeId, topProductRows);
+    const rtoCurrent = computeRtoPercent(returnedCurrentMonth, deliveredCurrentMonth);
+    const rtoPrevious = computeRtoPercent(returnedPreviousMonth, deliveredPreviousMonth);
 
     return {
       tiles: {
@@ -117,6 +167,12 @@ class VendorDashboardService {
         orders: {
           count: ordersCurrentMonth,
           changePercent: percentChange(ordersCurrentMonth, ordersPreviousMonth),
+        },
+        rto: {
+          percent: rtoCurrent,
+          returnedCount: returnedCurrentMonth,
+          deliveredCount: deliveredCurrentMonth,
+          changePercent: percentChange(rtoCurrent, rtoPrevious),
         },
         lowStockProducts: { count: lowStockCount },
         outOfStockProducts: { count: outOfStockCount },

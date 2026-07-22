@@ -69,6 +69,18 @@ export const updateMeSchema: FastifySchema = {
     type: 'object',
     properties: {
       name: { type: 'string', minLength: 1, maxLength: 255, description: 'Display name of the user' },
+      email: {
+        type: 'string',
+        format: 'email',
+        maxLength: 255,
+        description: 'Email address',
+      },
+      phone: {
+        type: 'string',
+        minLength: 1,
+        maxLength: 20,
+        description: 'Phone number in E.164 format (e.g. +919121191210)',
+      },
       profileImage: { type: 'string', format: 'uri', description: 'S3 public URL of the profile picture' },
     },
     additionalProperties: false,

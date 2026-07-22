@@ -356,6 +356,11 @@ export const orderObject = {
     discountAmount: { type: 'number' },
     couponCode: { type: 'string', nullable: true },
     items: { type: 'array', items: orderItemObject },
+    stores: {
+      type: 'array',
+      description: 'Unique stores that supply items on this order (derived from line items).',
+      items: orderItemStoreObject,
+    },
     address: addressObject,
     paymentType: { type: 'string', nullable: true, enum: ['card', 'upi', 'netbanking', 'wallet', 'other'], description: 'Payment method used for this order' },
     walletAmountPaid: {
@@ -1185,6 +1190,26 @@ export const adminGetOrderSchema: FastifySchema = {
         data: { type: 'object', properties: { order: adminOrderWithCustomer } },
       },
     },
+    401: unauthorized,
+    403: notFound,
+    404: notFound,
+  },
+};
+
+export const adminDownloadOrderInvoiceSchema: FastifySchema = {
+  tags: ['Orders'],
+  summary: 'Download customer invoice PDF for an order (admin only)',
+  description:
+    'Returns a PDF invoice for the given order (by UUID or display order ID). ' +
+    'Includes customer, shipping address, line items, and pricing totals.',
+  security: [{ BearerAuth: [] }],
+  params: {
+    type: 'object',
+    required: ['orderId'],
+    properties: { orderId: orderRefParam },
+  },
+  produces: ['application/pdf'],
+  response: {
     401: unauthorized,
     403: notFound,
     404: notFound,

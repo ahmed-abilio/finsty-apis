@@ -46,7 +46,7 @@ module.exports = {
           allowNull: false,
         },
         image_url: {
-          type: Sequelize.STRING(500),
+          type: Sequelize.JSONB,
           allowNull: true,
         },
         status: {

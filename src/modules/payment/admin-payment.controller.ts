@@ -23,6 +23,17 @@ class AdminPaymentController {
     void reply.status(200).send({ success: true, data: result });
   }
 
+  async getSummary(
+    request: FastifyRequest<{ Querystring: { from?: string; to?: string } }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const data = await paymentService.getAdminPaymentsSummary({
+      from: request.query.from,
+      to: request.query.to,
+    });
+    void reply.status(200).send({ success: true, data });
+  }
+
   async getOne(
     request: FastifyRequest<{ Params: { paymentId: string } }>,
     reply: FastifyReply,
