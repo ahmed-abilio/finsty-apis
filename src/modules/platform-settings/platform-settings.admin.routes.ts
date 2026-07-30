@@ -3,11 +3,35 @@ import { FastifyReply, FastifyRequest } from 'fastify';
 import { AppError } from '@utils/appError';
 import { Roles } from '@modules/user/user.model';
 import {
+  getAppConfig,
+  getAppConfigWithMeta,
   getShadowfaxDevLocalCallbackConfig,
+  updateAppConfig,
   updateShadowfaxDevLocalCallbackConfig,
+  type AppConfigUpdateInput,
 } from './platform-settings.service';
+import { getAppConfigSchema, patchAppConfigSchema } from './platform-settings.schema';
 
 class PlatformSettingsAdminController {
+  async getAppConfig(_request: FastifyRequest, reply: FastifyReply): Promise<void> {
+    const config = await getAppConfig();
+    void reply.status(200).send({
+      success: true,
+      data: getAppConfigWithMeta(config),
+    });
+  }
+
+  async patchAppConfig(
+    request: FastifyRequest<{ Body: AppConfigUpdateInput }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const config = await updateAppConfig(request.body ?? {});
+    void reply.status(200).send({
+      success: true,
+      data: getAppConfigWithMeta(config),
+    });
+  }
+
   async getShadowfaxDevLocalCallback(_request: FastifyRequest, reply: FastifyReply): Promise<void> {
     void reply.status(200).send({
       success: true,
@@ -38,6 +62,18 @@ export default async function platformSettingsAdminRoutes(
 ): Promise<void> {
   fastify.addHook('onRequest', fastify.authenticate);
   fastify.addHook('onRequest', fastify.requireRole(Roles.ADMIN));
+
+  fastify.get(
+    '/app-config',
+    { schema: getAppConfigSchema },
+    controller.getAppConfig.bind(controller),
+  );
+
+  fastify.patch(
+    '/app-config',
+    { schema: patchAppConfigSchema },
+    controller.patchAppConfig.bind(controller),
+  );
 
   fastify.get(
     '/shadowfax-dev-local-callback',

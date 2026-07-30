@@ -281,3 +281,53 @@ export const markAllNotificationsReadSchema: FastifySchema = {
     401: unauthorized,
   },
 };
+
+export const deleteNotificationSchema: FastifySchema = {
+  tags: ['Notifications'],
+  operationId: 'deleteNotifications',
+  summary: 'DELETE /notifications — delete one or more',
+  description:
+    `**Path:** \`DELETE /api/v1/notifications\`\n\n` +
+    'Permanently deletes inbox rows by id. Body must include `ids` (UUID array, min 1). ' +
+    'Only notifications owned by the authenticated user and JWT role are deleted. ' +
+    'Returns `404 NOTIFICATION_NOT_FOUND` when none of the ids match. ' +
+    'Ids that do not belong to the caller are skipped; response `ids` lists what was deleted.',
+  security: [{ BearerAuth: [] }],
+  body: {
+    type: 'object',
+    required: ['ids'],
+    additionalProperties: false,
+    properties: {
+      ids: {
+        type: 'array',
+        minItems: 1,
+        maxItems: 100,
+        items: { type: 'string', format: 'uuid' },
+        description: 'Inbox notification UUIDs to delete',
+      },
+    },
+  },
+  response: {
+    200: {
+      description: 'Notifications deleted',
+      type: 'object',
+      properties: {
+        success: { type: 'boolean' },
+        data: {
+          type: 'object',
+          properties: {
+            deleted: { type: 'number', description: 'Number of rows deleted' },
+            ids: {
+              type: 'array',
+              items: { type: 'string', format: 'uuid' },
+              description: 'Ids that were deleted',
+            },
+          },
+        },
+      },
+    },
+    400: badRequest,
+    401: unauthorized,
+    404: notFound,
+  },
+};

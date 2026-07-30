@@ -16,6 +16,9 @@ const redisConfig = {
   maxRetriesPerRequest: null, // Required by BullMQ
   enableReadyCheck: false,
   lazyConnect: true,
+  // Docker Desktop on Windows resets idle published-port TCP ~30s without keepalive
+  keepAlive: 10_000,
+  family: 4,
 };
 
 // Singleton for application use

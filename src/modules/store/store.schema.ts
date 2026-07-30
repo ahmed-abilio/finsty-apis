@@ -313,7 +313,7 @@ export const listStoresSchema: FastifySchema = {
     properties: {
       lat: { type: 'number', minimum: -90, maximum: 90, description: 'User latitude' },
       lng: { type: 'number', minimum: -180, maximum: 180, description: 'User longitude' },
-      radiusKm: { type: 'number', minimum: 1, maximum: 100, description: 'Search radius in km. Defaults to GEOFENCE_RADIUS_KM env var if not provided.' },
+      radiusKm: { type: 'number', minimum: 1, maximum: 100, description: 'Search radius in km. Defaults to platform setting `geofence_radius_km` if not provided.' },
       gender: {
         type: 'string',
         enum: ['men', 'women', 'kids', 'unisex'],

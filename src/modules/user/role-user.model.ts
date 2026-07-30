@@ -2,6 +2,7 @@ import { DataTypes, Model, Optional, ModelStatic } from 'sequelize';
 import sequelize from '@config/database';
 import { AuthProvider } from '@types-app/index';
 import User, { Roles } from './user.model';
+import { getReferralRewardAmountSync } from '@modules/platform-settings/platform-settings.service';
 
 export interface RoleUserAttributes {
   id: string;
@@ -16,12 +17,13 @@ export interface RoleUserAttributes {
   ipAddress: string | null;
   referralCode: string;
   referredById: string | null;
+  lastLoginAt: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export interface RoleUserCreationAttributes
-  extends Optional<RoleUserAttributes, 'id' | 'isActive' | 'name' | 'phone' | 'email' | 'profileImage' | 'ipAddress' | 'referralCode' | 'referredById'> {}
+  extends Optional<RoleUserAttributes, 'id' | 'isActive' | 'name' | 'phone' | 'email' | 'profileImage' | 'ipAddress' | 'referralCode' | 'referredById' | 'lastLoginAt'> {}
 
 class RoleUser extends Model<RoleUserAttributes, RoleUserCreationAttributes> implements RoleUserAttributes {
   declare id: string;
@@ -36,6 +38,7 @@ class RoleUser extends Model<RoleUserAttributes, RoleUserCreationAttributes> imp
   declare ipAddress: string | null;
   declare referralCode: string;
   declare referredById: string | null;
+  declare lastLoginAt: Date | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -56,7 +59,7 @@ class RoleUser extends Model<RoleUserAttributes, RoleUserCreationAttributes> imp
       updatedAt: (this.updatedAt || raw.updatedAt) ? new Date(this.updatedAt || raw.updatedAt).toISOString() : '',
       ip: this.ipAddress ?? raw.ipAddress ?? raw.ip_address ?? null,
       referralCode: this.referralCode || raw.referralCode || raw.referral_code || '',
-      referralAmount: parseFloat(process.env.REFERRAL_REWARD_AMOUNT ?? '100'),
+      referralAmount: getReferralRewardAmountSync(),
       referredById: this.referredById ?? raw.referredById ?? raw.referred_by_id ?? null,
     };
   }
@@ -127,6 +130,11 @@ function initRoleModel(model: typeof RoleUser, tableName: string, role: Roles): 
         type: DataTypes.UUID,
         allowNull: true,
         field: 'referred_by_id',
+      },
+      lastLoginAt: {
+        type: DataTypes.DATE,
+        allowNull: true,
+        field: 'last_login_at',
       },
     },
     {

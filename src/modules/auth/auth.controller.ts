@@ -3,8 +3,7 @@ import * as authService from './auth.service';
 import userService from '../user/user.service';
 import storeService from '../store/store.service';
 import { RefreshTokenBody } from './auth.schema';
-import { NotificationType } from '@modules/notification/notification.types';
-import { notifyAdmin, notifyUser, notifyVendor } from '@modules/notification/notification.service';
+import { recordLoginAndNotify } from '@modules/notification/notification.login';
 import {
   assertDeviceTokenPayloadValid,
   registerDeviceTokenFromAuth,
@@ -58,7 +57,7 @@ class AuthController {
       request.body.referralCode ?? null,
     );
     await registerDeviceTokenFromAuth(user.id, Roles.USER, request.body);
-    notifyUser(user.id, NotificationType.LOGIN_SUCCESS);
+    await recordLoginAndNotify({ user, role: Roles.USER, isNew });
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {
@@ -105,7 +104,7 @@ class AuthController {
       'admin',
     );
     await registerDeviceTokenFromAuth(user.id, Roles.ADMIN, request.body);
-    notifyAdmin(user.id, NotificationType.LOGIN_SUCCESS);
+    await recordLoginAndNotify({ user, role: Roles.ADMIN, isNew });
     void reply.status(200).send({
       success: true,
       data: {
@@ -153,7 +152,7 @@ class AuthController {
 
     if (userId) {
       await registerDeviceTokenFromAuth(userId, Roles.VENDOR, request.body);
-      notifyVendor(userId, NotificationType.LOGIN_SUCCESS);
+      await recordLoginAndNotify({ user, role: Roles.VENDOR, isNew });
     }
 
     void reply.status(isNew ? 201 : 200).send({
@@ -176,6 +175,7 @@ class AuthController {
     assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.googleSignIn(request.body.idToken, request.ip, request.body.referralCode ?? null);
     await registerDeviceTokenFromAuth(user.id, Roles.USER, request.body);
+    await recordLoginAndNotify({ user, role: Roles.USER, isNew });
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {
@@ -194,6 +194,7 @@ class AuthController {
     assertDeviceTokenPayloadValid(request.body);
     const { tokens, user, isNew } = await authService.appleSignIn(request.body.idToken, request.ip, request.body.referralCode ?? null);
     await registerDeviceTokenFromAuth(user.id, Roles.USER, request.body);
+    await recordLoginAndNotify({ user, role: Roles.USER, isNew });
     void reply.status(isNew ? 201 : 200).send({
       success: true,
       data: {

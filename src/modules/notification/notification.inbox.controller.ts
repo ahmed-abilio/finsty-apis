@@ -54,6 +54,19 @@ class NotificationInboxController {
     );
     void reply.status(200).send({ success: true, data: result });
   }
+
+  async delete(
+    request: FastifyRequest<{ Body: { ids: string[] } }>,
+    reply: FastifyReply,
+  ): Promise<void> {
+    const role = resolveRoleFromJwt(request.user.role);
+    const result = await notificationInboxService.delete(
+      request.body.ids,
+      request.user.sub,
+      role,
+    );
+    void reply.status(200).send({ success: true, data: result });
+  }
 }
 
 export default new NotificationInboxController();

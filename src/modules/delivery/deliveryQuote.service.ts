@@ -86,8 +86,8 @@ export async function resolveDeliveryQuote(params: {
 
   const quotedDeliveryCharge = parseFloat(quote.deliveryFee.toFixed(2));
   const deliveryChargeApplied = deliveryFeeWaived ? 0 : quotedDeliveryCharge;
-  const taxAmount = computeTaxOnSubtotal(subtotalRounded);
-  const platformFee = getPlatformFee();
+  const taxAmount = await computeTaxOnSubtotal(subtotalRounded);
+  const platformFee = await getPlatformFee();
   const estimatedPayableTotal = parseFloat(
     (subtotalRounded + taxAmount + platformFee + deliveryChargeApplied).toFixed(2),
   );

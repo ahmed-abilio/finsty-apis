@@ -5,6 +5,7 @@ import {
   unreadCountNotificationsSchema,
   markNotificationReadSchema,
   markAllNotificationsReadSchema,
+  deleteNotificationSchema,
 } from './notification.inbox.schema';
 import type { ListNotificationsQuery } from './notification.inbox.service';
 import type { NotificationCategory } from './notification-inbox.model';
@@ -34,6 +35,12 @@ export default async function notificationInboxRoutes(fastify: FastifyInstance):
     '/:notificationId/read',
     { schema: markNotificationReadSchema },
     notificationInboxController.markRead.bind(notificationInboxController),
+  );
+
+  fastify.delete<{ Body: { ids: string[] } }>(
+    '/',
+    { schema: deleteNotificationSchema },
+    notificationInboxController.delete.bind(notificationInboxController),
   );
 }
 

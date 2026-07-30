@@ -28,6 +28,7 @@ import vendorRevenueService from './vendorRevenue.service';
 import { stockStatusWhere } from '@modules/product/productStock.util';
 import type { DateRange } from './vendorDashboard.utils';
 import { formatVendorProduct, type ProductWithVendorAssocs } from './vendorProductFormat';
+import { getGeofenceRadiusKm } from '@modules/platform-settings/platform-settings.service';
 import { notifyVendorStoreReviewResult } from '@modules/notification/notification.store';
 import { assertStoreEmailAvailable, throwIfUniqueConstraint } from '@utils/sequelizeUniqueConstraint';
 
@@ -231,11 +232,14 @@ class StoreService {
 
   // ─── Search ──────────────────────────────────────────────────────────────────
 
-  async search(query: StoreSearchQuery, options?: { includeOwner?: boolean }) {
+  async search(
+    query: StoreSearchQuery,
+    options?: { includeOwner?: boolean; includeHoliday?: boolean },
+  ) {
     const {
       lat,
       lng,
-      radiusKm = parseFloat(process.env.GEOFENCE_RADIUS_KM ?? '10'),
+      radiusKm: radiusKmInput,
       gender,
       categoryId,
       minRating,
@@ -250,6 +254,7 @@ class StoreService {
       limit = 20,
     } = query;
 
+    const radiusKm = radiusKmInput ?? (await getGeofenceRadiusKm());
     const offset = (page - 1) * limit;
 
     const where: any = {};
@@ -264,6 +269,11 @@ class StoreService {
       }
     } else {
       (where as any).isActive = true;
+    }
+
+    // Hide holiday-mode stores from customer discovery; admins can still see them.
+    if (!options?.includeHoliday) {
+      (where as any).isHoliday = false;
     }
 
     if (onboardingStatus) {
@@ -844,7 +854,7 @@ class StoreService {
   async getCategoryExplorer(query: CategoryExplorerQuery) {
     const { city, isActive = true, gender } = query;
 
-    const storeWhere: any = { isActive };
+    const storeWhere: any = { isActive, isHoliday: false };
     if (city) storeWhere.city = { [Op.iLike]: `%${city}%` };
     if (gender) storeWhere.genders = { [Op.contains]: [gender] };
 

@@ -63,6 +63,7 @@ import { canManualTransition } from '@modules/shadowfax/tracking/order-status.fs
 import { publishOrderStatusChanged } from '@modules/shadowfax/tracking/order-status.publisher';
 import type { ShadowfaxOrderStatusData } from '@modules/shadowfax/shadowfaxOrderStatus.types';
 import { computeTaxOnSubtotal, getPlatformFee } from '@config/pricing.config';
+import { getReferralRewardAmount } from '@modules/platform-settings/platform-settings.service';
 import { VENDOR_SALES_ORDER_STATUSES, type DateRange } from '@modules/store/vendorDashboard.utils';
 import type { CouponValidationContext } from '@modules/coupon/coupon.service';
 import type { OrderStatus } from './order.model';
@@ -79,8 +80,6 @@ import { failPendingPaymentsForOrder } from '@modules/payment/payment.service';
 import { normalizeRangeEnd, normalizeRangeStart } from '@modules/dashboard/dashboard.utils';
 
 export type { CreateOrderInput } from './order.checkout.types';
-
-const REFERRAL_REWARD_AMOUNT = parseFloat(process.env.REFERRAL_REWARD_AMOUNT ?? '100');
 
 export type OrderLineItemMyReview = {
   id: string;
@@ -206,8 +205,8 @@ class OrderService {
     }
 
     // ── Price computation ────────────────────────────────────────────────────
-    const taxAmount = computeTaxOnSubtotal(subtotal);
-    const platformFee = getPlatformFee();
+    const taxAmount = await computeTaxOnSubtotal(subtotal);
+    const platformFee = await getPlatformFee();
     const waivedByCoupon = deliveryChargeOverride === 0;
     const deliveryFeeWaived = deliveryType === 'pickup' || waivedByCoupon;
 
@@ -1647,7 +1646,7 @@ class OrderService {
     // Self-referral guard
     if (user.referredById === userId) return;
 
-    const rewardAmount = REFERRAL_REWARD_AMOUNT;
+    const rewardAmount = await getReferralRewardAmount();
 
     // Credit referred user
     await this._creditWallet(

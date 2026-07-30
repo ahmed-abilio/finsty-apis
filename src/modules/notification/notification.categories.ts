@@ -31,6 +31,7 @@ const TYPE_CATEGORY: Record<NotificationType, NotificationCategory> = {
   [NotificationType.REFERRAL_REWARD_CREDITED]: 'wallet',
   [NotificationType.COUPON_APPLIED]: 'promotions',
   [NotificationType.RATE_ORDER_REMINDER]: 'orders',
+  [NotificationType.CART_ABANDONMENT]: 'promotions',
   [NotificationType.VENDOR_NEW_ORDER]: 'orders',
   [NotificationType.VENDOR_LOW_STOCK]: 'inventory',
   [NotificationType.VENDOR_OUT_OF_STOCK]: 'inventory',

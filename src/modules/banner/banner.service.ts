@@ -2,7 +2,7 @@ import { Op } from 'sequelize';
 import { PriceBanner, StoreDiscountBanner } from './banner.model';
 import { AppError } from '@utils/appError';
 import Store from '@modules/store/store.model';
-import { getStoreIdsWithinRadius, GEOFENCE_RADIUS_KM } from '@utils/geo';
+import { getStoreIdsWithinRadius } from '@utils/geo';
 import {
   notifyAdminsNewBannerApplication,
   notifyVendorBannerApproved,
@@ -224,7 +224,7 @@ class BannerService {
     const discountWhere: Record<string, unknown> = { isActive: true, isApproved: true };
 
     if (coords) {
-      const geoStoreIds = await getStoreIdsWithinRadius(coords.lat, coords.lng, GEOFENCE_RADIUS_KM);
+      const geoStoreIds = await getStoreIdsWithinRadius(coords.lat, coords.lng);
       if (!geoStoreIds.length) {
         const priceBanners = await PriceBanner.findAll({
           where: { isActive: true },

@@ -2,6 +2,7 @@ import fp from 'fastify-plugin';
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { verifyAccessToken, getActiveSession } from '@modules/auth/auth.service';
 import userService from '@modules/user/user.service';
+import { touchUserLastActive } from '@modules/user/user.activity';
 import { AppError } from '@utils/appError';
 import type { JwtPayload } from '@types-app/index';
 import { Roles } from '@modules/user/user.model';
@@ -28,6 +29,9 @@ declare module 'fastify' {
 async function authenticatePlugin(fastify: FastifyInstance): Promise<void> {
   async function assertAuthenticatedUser(payload: JwtPayload): Promise<JwtPayload> {
     await userService.findByIdForRole(payload.sub, { role: payload.role as Roles });
+    if (payload.role === Roles.USER) {
+      touchUserLastActive(payload.sub);
+    }
     return payload;
   }
 

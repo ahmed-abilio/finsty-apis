@@ -60,6 +60,14 @@ async function swaggerPlugin(fastify: FastifyInstance): Promise<void> {
         { name: 'Payments', description: 'Razorpay payment initiation and capture flows' },
         { name: 'Payments — Admin', description: 'Admin-only: process wallet refund requests' },
         { name: 'OTP', description: 'Reusable OTP send/verify for phone and email — consumed by store creation and other flows' },
+        {
+          name: 'Config',
+          description:
+            'Public and admin platform configuration.\n\n' +
+            '**Public:** `GET /platform-settings/public` (YouTube URL, referral amount, geofence radius).\n' +
+            '**Admin:** `GET|PATCH /admin/platform-settings/app-config` (tax rate, platform fee, geofence, referral, YouTube). ' +
+            'Values live in `platform_settings`; env is fallback only.',
+        },
         { name: 'Shadowfax', description: 'Shadowfax logistics proxy APIs' },
         {
           name: 'Webhooks',
@@ -71,7 +79,8 @@ async function swaggerPlugin(fastify: FastifyInstance): Promise<void> {
           description:
             'In-app notification inbox (PostgreSQL). Each FCM push is also persisted for history and read state.\n\n' +
             '**Endpoints:** `GET /notifications` (paginated inbox), `GET /notifications/unread-count`, ' +
-            '`PATCH /notifications/{notificationId}/read`, `PATCH /notifications/read-all`.\n\n' +
+            '`PATCH /notifications/{notificationId}/read`, `PATCH /notifications/read-all`, ' +
+            '`DELETE /notifications/{notificationId}`.\n\n' +
             'Inbox is scoped by JWT **role** (`user` / `vendor` / `admin`).\n\n' +
             '**Vendor category filter** on list/read-all: `orders` (new orders), `inventory` (stock alerts), `account` (login).',
         },

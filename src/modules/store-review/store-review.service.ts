@@ -1,4 +1,4 @@
-import { fn, col } from 'sequelize';
+import { fn, col, Transaction } from 'sequelize';
 import sequelize from '@config/database';
 import Store from '@modules/store/store.model';
 import StoreReview from '@modules/store/store-review.model';
@@ -32,7 +32,11 @@ export interface PaginatedStoreReviews {
 
 // ─── Aggregate helper ─────────────────────────────────────────────────────────
 
-async function recalculateStoreRating(storeId: string): Promise<void> {
+/**
+ * Recalculates cached store.rating / store.totalRatings from approved reviews.
+ * Pass the write transaction so the aggregate sees uncommitted rows.
+ */
+async function recalculateStoreRating(storeId: string, transaction?: Transaction): Promise<void> {
   const result = await StoreReview.findOne({
     where: { storeId, isApproved: true },
     attributes: [
@@ -40,6 +44,7 @@ async function recalculateStoreRating(storeId: string): Promise<void> {
       [fn('AVG', col('rating')), 'avg'],
     ],
     raw: true,
+    transaction,
   }) as any;
 
   const totalRatings = Number(result?.count ?? 0);
@@ -47,7 +52,7 @@ async function recalculateStoreRating(storeId: string): Promise<void> {
     ? parseFloat(Number(result?.avg ?? 0).toFixed(2))
     : 0;
 
-  await Store.update({ rating, totalRatings }, { where: { id: storeId } });
+  await Store.update({ rating, totalRatings }, { where: { id: storeId }, transaction });
 }
 
 // ─── Service ──────────────────────────────────────────────────────────────────
@@ -88,7 +93,8 @@ class StoreReviewService {
         reviewImages.push(...created);
       }
 
-      await recalculateStoreRating(storeId);
+      // Must use the same transaction or the aggregate misses the new review.
+      await recalculateStoreRating(storeId, t);
 
       return {
         ...review.toPublicJSON(),
@@ -119,17 +125,20 @@ class StoreReviewService {
     });
 
     return {
-      items: rows.map((r) => ({
-        ...r.toPublicJSON(),
-        images: ((r as any).images as StoreReviewImage[] ?? []).map((img) => img.toPublicJSON()),
-        user: (r as any).user
-          ? {
-              id: (r as any).user.id,
-              name: (r as any).user.name ?? null,
-              profileImage: (r as any).user.profileImage ?? null,
-            }
-          : null,
-      })),
+      items: rows.map((r) => {
+        const publicReview = r.toPublicJSON();
+        delete publicReview.userId;
+        return {
+          ...publicReview,
+          images: ((r as any).images as StoreReviewImage[] ?? []).map((img) => img.toPublicJSON()),
+          user: (r as any).user
+            ? {
+                name: (r as any).user.name ?? null,
+                profileImage: (r as any).user.profileImage ?? null,
+              }
+            : null,
+        };
+      }),
       total: count,
       page,
       limit,
@@ -166,7 +175,10 @@ class StoreReviewService {
         ...r.toPublicJSON(),
         images: ((r as any).images as StoreReviewImage[] ?? []).map((img) => img.toPublicJSON()),
         user: (r as any).user
-          ? { id: (r as any).user.id, name: (r as any).user.name ?? null }
+          ? {
+              name: (r as any).user.name ?? null,
+              profileImage: (r as any).user.profileImage ?? null,
+            }
           : null,
         store: (r as any).store
           ? { id: (r as any).store.id, name: (r as any).store.name }

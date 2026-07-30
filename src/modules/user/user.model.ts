@@ -1,6 +1,7 @@
 import { DataTypes, Model, Optional } from 'sequelize';
 import sequelize from '@config/database';
 import { AuthProvider } from '@types-app/index';
+import { getReferralRewardAmountSync } from '@modules/platform-settings/platform-settings.service';
 
 // ─── Attribute interfaces ──────────────────────────────────────────────────────
 export enum Roles {
@@ -21,12 +22,27 @@ export interface UserAttributes {
   ipAddress: string | null;
   referralCode: string;
   referredById: string | null;
+  lastLoginAt: Date | null;
+  lastActiveAt: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 export interface UserCreationAttributes
-  extends Optional<UserAttributes, 'id' | 'isActive' | 'name' | 'phone' | 'email' | 'profileImage' | 'ipAddress' | 'referralCode' | 'referredById'> {}
+  extends Optional<
+    UserAttributes,
+    | 'id'
+    | 'isActive'
+    | 'name'
+    | 'phone'
+    | 'email'
+    | 'profileImage'
+    | 'ipAddress'
+    | 'referralCode'
+    | 'referredById'
+    | 'lastLoginAt'
+    | 'lastActiveAt'
+  > {}
 
 // ─── Model class ──────────────────────────────────────────────────────────────
 
@@ -43,6 +59,8 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
   declare ipAddress: string | null;
   declare referralCode: string;
   declare referredById: string | null;
+  declare lastLoginAt: Date | null;
+  declare lastActiveAt: Date | null;
   declare readonly createdAt: Date;
   declare readonly updatedAt: Date;
 
@@ -69,7 +87,7 @@ class User extends Model<UserAttributes, UserCreationAttributes> implements User
       updatedAt: (this.updatedAt || raw.updatedAt) ? new Date(this.updatedAt || raw.updatedAt).toISOString() : '',
       ip: this.ipAddress ?? raw.ipAddress ?? raw.ip_address ?? null,
       referralCode: this.referralCode || raw.referralCode || raw.referral_code || '',
-      referralAmount: parseFloat(process.env.REFERRAL_REWARD_AMOUNT ?? '100'),
+      referralAmount: getReferralRewardAmountSync(),
       referredById: this.referredById ?? raw.referredById ?? raw.referred_by_id ?? null,
     };
   }
@@ -140,6 +158,16 @@ User.init(
       type: DataTypes.UUID,
       allowNull: true,
       field: 'referred_by_id',
+    },
+    lastLoginAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'last_login_at',
+    },
+    lastActiveAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: 'last_active_at',
     },
   },
   {

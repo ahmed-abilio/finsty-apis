@@ -345,7 +345,7 @@ export const orderObject = {
     deliveryType: { type: 'string', enum: ['delivery', 'pickup'] },
     subtotal: { type: 'number' },
     taxAmount: { type: 'number' },
-    platformFee: { type: 'number', description: 'Fixed platform fee per order in INR (from `PLATFORM_FEE`).' },
+    platformFee: { type: 'number', description: 'Fixed platform fee per order in INR (platform setting `platform_fee`).' },
     deliveryCharge: { type: 'number' },
     totalAmount: { type: 'number' },
     notes: { type: 'string', nullable: true },
@@ -501,7 +501,7 @@ export const createOrderSchema: FastifySchema = {
     'The returned `jobId` can be polled via **GET /orders/status/:jobId** to get the final ' +
     '`success` (with `orderId`) or `failed` (with `failureCode`) outcome. ' +
     'This architecture allows the server to survive viral / flash-sale traffic spikes. ' +
-    '`totalAmount` includes merchandise subtotal, tax (`TAX_RATE` on subtotal), fixed `PLATFORM_FEE`, delivery when applicable, minus coupon discounts. ' +
+    '`totalAmount` includes merchandise subtotal, tax (platform `tax_rate` on subtotal), fixed `platform_fee`, delivery when applicable, minus coupon discounts. ' +
     'Returns **400** with `MULTI_STORE_CHECKOUT` when selected cart items belong to more than one store. ' +
     'Delivery fees use Shadowfax serviceability (see `deliveryCharge`); free delivery applies only with a `FREE_DELIVERY` coupon (not by subtotal). ' +
     'For delivery, the server fetches the Shadowfax fee using the given `addressId` or the user default address (`GET /cart/delivery-quote` for preview). ' +

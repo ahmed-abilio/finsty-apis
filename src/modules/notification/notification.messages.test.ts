@@ -9,6 +9,22 @@ describe('buildNotificationPayload', () => {
     expect(payload.data.click_action).toBe('FLUTTER_NOTIFICATION_CLICK');
   });
 
+  it('uses Welcome to Finsty for first-time login greeting', () => {
+    const payload = buildNotificationPayload(NotificationType.LOGIN_SUCCESS, {
+      loginGreeting: 'welcome',
+    });
+    expect(payload.title).toBe('Welcome to Finsty');
+    expect(payload.body).toBe('Welcome to Finsty');
+  });
+
+  it('uses Welcome back for returning login greeting', () => {
+    const payload = buildNotificationPayload(NotificationType.LOGIN_SUCCESS, {
+      loginGreeting: 'welcome_back',
+    });
+    expect(payload.title).toBe('Welcome back');
+    expect(payload.body).toContain('signed in');
+  });
+
   it('stringifies context fields in data', () => {
     const payload = buildNotificationPayload(NotificationType.ORDER_PLACED, {
       orderId: 'abc-123',

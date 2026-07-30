@@ -210,15 +210,15 @@ const cartResponse = {
         subtotal: { type: 'number' },
         taxRate: {
           type: 'number',
-          description: 'Effective GST rate on merchandise subtotal (same as env `TAX_RATE`, e.g. 0.18 for 18%).',
+          description: 'Effective GST rate on merchandise subtotal (platform setting `tax_rate`, e.g. 0.18 for 18%).',
         },
         taxAmount: {
           type: 'number',
-          description: 'GST on the selected-items merchandise subtotal (rate from `TAX_RATE`).',
+          description: 'GST on the selected-items merchandise subtotal (rate from platform `tax_rate`).',
         },
         platformFee: {
           type: 'number',
-          description: 'Fixed platform fee per order in INR from `PLATFORM_FEE` (same value used at checkout).',
+          description: 'Fixed platform fee per order in INR from platform setting `platform_fee` (same value used at checkout).',
         },
         itemCount: { type: 'number' },
         totalItems: { type: 'number' },

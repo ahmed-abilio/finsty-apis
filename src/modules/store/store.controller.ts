@@ -118,6 +118,7 @@ class StoreController {
     const isAdmin = (request as { user?: { role?: string } }).user?.role === Roles.ADMIN;
     const result = await storeService.search(request.query as StoreSearchQuery, {
       includeOwner: isAdmin,
+      includeHoliday: isAdmin,
     });
     void reply.status(200).send({ success: true, data: result });
   }

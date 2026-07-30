@@ -38,10 +38,17 @@ export function buildNotificationPayload(
   let body = '';
 
   switch (type) {
-    case NotificationType.LOGIN_SUCCESS:
-      title = 'Welcome back';
-      body = "You're signed in to Finsty.";
+    case NotificationType.LOGIN_SUCCESS: {
+      const greeting = str(context.loginGreeting, 'welcome_back');
+      if (greeting === 'welcome') {
+        title = 'Welcome to Finsty';
+        body = 'Welcome to Finsty';
+      } else {
+        title = 'Welcome back';
+        body = "You're signed in to Finsty.";
+      }
       break;
+    }
     case NotificationType.ORDER_PLACED:
       title = 'Order placed';
       body = orderNumber
@@ -99,6 +106,15 @@ export function buildNotificationPayload(
         ? `How was order #${orderNumber}? Tap to leave a review.`
         : 'How was your experience? Tap to leave a review.';
       break;
+    case NotificationType.CART_ABANDONMENT: {
+      const itemCount = Number(context.itemCount);
+      title = 'You left items in your cart';
+      body =
+        Number.isFinite(itemCount) && itemCount > 0
+          ? `You still have ${itemCount} item${itemCount === 1 ? '' : 's'} waiting. Complete your order before they're gone.`
+          : "Complete your order before they're gone.";
+      break;
+    }
     case NotificationType.VENDOR_NEW_ORDER:
       title = 'New order';
       body = orderNumber

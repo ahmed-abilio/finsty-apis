@@ -382,7 +382,7 @@ export const listActiveBannersSchema: FastifySchema = {
   summary: 'List all active banners for the storefront',
   description:
     'Returns active price banners and approved + active store discount banners. ' +
-    'Provide `lat`+`lng` to restrict store discount banners to stores within the GEOFENCE_RADIUS_KM radius. ' +
+    'Provide `lat`+`lng` to restrict store discount banners to stores within the platform `geofence_radius_km` radius. ' +
     'Price banners are always returned regardless of location.',
   security: [{ BearerAuth: [] }],
   querystring: {

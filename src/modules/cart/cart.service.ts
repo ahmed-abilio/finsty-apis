@@ -92,7 +92,7 @@ class CartService {
       return {
         items: [],
         subtotal: 0,
-        taxRate: getTaxRate(),
+        taxRate: await getTaxRate(),
         taxAmount: 0,
         platformFee: 0,
         itemCount: 0,
@@ -102,7 +102,7 @@ class CartService {
       };
     }
 
-    const formatted = this.formatCart(cart, storeId);
+    const formatted = await this.formatCart(cart, storeId);
     const total = formatted.items.length;
     const totalPages = Math.ceil(total / limit);
     const offset = (page - 1) * limit;
@@ -196,7 +196,7 @@ class CartService {
     return {
       items: [],
       subtotal: 0,
-      taxRate: getTaxRate(),
+      taxRate: await getTaxRate(),
       taxAmount: 0,
       platformFee: 0,
       itemCount: 0,
@@ -206,7 +206,7 @@ class CartService {
     };
   }
 
-  formatCart(cart: Cart, storeId?: string) {
+  async formatCart(cart: Cart, storeId?: string) {
     const allItems = (cart as unknown as { items: CartItem[] }).items ?? [];
     
     // Filter by storeId if provided
@@ -314,9 +314,9 @@ class CartService {
     });
 
     const subtotalRounded = parseFloat(subtotal.toFixed(2));
-    const taxRate = getTaxRate();
-    const taxAmount = computeTaxOnSubtotal(subtotalRounded);
-    const platformFee = getPlatformFee();
+    const taxRate = await getTaxRate();
+    const taxAmount = await computeTaxOnSubtotal(subtotalRounded);
+    const platformFee = await getPlatformFee();
     return {
       items: formattedItems,
       subtotal: subtotalRounded,
@@ -406,7 +406,7 @@ class CartService {
       );
     }
 
-    return { cart, formatted: this.formatCart(cart) };
+    return { cart, formatted: await this.formatCart(cart) };
   }
 
   /**

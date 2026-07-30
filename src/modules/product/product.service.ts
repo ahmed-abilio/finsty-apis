@@ -1,5 +1,5 @@
 import { Transaction, Op, Order } from 'sequelize';
-import { getStoreIdsWithinRadius, GEOFENCE_RADIUS_KM } from '@utils/geo';
+import { getStoreIdsWithinRadius } from '@utils/geo';
 import sequelize from '@config/database';
 import { generateUniqueSlug } from '@utils/slugify';
 import Product from './product.model';
@@ -294,7 +294,7 @@ class ProductService {
     let resolvedStoreIds = input.storeIds ? [...input.storeIds] : undefined;
 
     if (input.lat !== undefined && input.lng !== undefined) {
-      const geoStoreIds = await getStoreIdsWithinRadius(input.lat, input.lng, GEOFENCE_RADIUS_KM);
+      const geoStoreIds = await getStoreIdsWithinRadius(input.lat, input.lng);
       if (resolvedStoreIds?.length) {
         resolvedStoreIds = resolvedStoreIds.filter((id) => geoStoreIds.includes(id));
       } else {

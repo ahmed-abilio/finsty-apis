@@ -57,7 +57,7 @@ Every notification `data` payload includes:
 
 | Type | Title | Body (template) | When it is sent |
 |------|-------|-----------------|-----------------|
-| `LOGIN_SUCCESS` | Welcome back | You're signed in to Finsty. | Customer OTP verified (`auth.controller` → `verifyOtp`) |
+| `LOGIN_SUCCESS` | Welcome to Finsty / Welcome back | First login → "Welcome to Finsty". Returning after 12+ days → "Welcome back". No login push within 12 days. | Customer OTP / Google / Apple (`auth.controller`) |
 | `ORDER_PLACED` | Order placed | Your order #{orderNumber} was placed successfully. | After payment confirms the order (`payment.service` capture / full wallet initiate; `order.service` → `payWithWallet`) |
 | `ORDER_STATUS` | Order update | Your order #{orderNumber} is now {status}. | Vendor or admin changes order status (`order.service` → `updateVendorOrderStatus`, `updateStatus`); also `confirmed` after pay-with-wallet or Razorpay capture |
 | `PAYMENT_SUCCESS` | Payment successful | ₹{amount} paid for order #{orderNumber}. | Razorpay payment captured for an order (`payment.service` → `capturePayment`) |
@@ -90,7 +90,7 @@ Every notification `data` payload includes:
 
 | Type | Title | Body (template) | When it is sent |
 |------|-------|-----------------|-----------------|
-| `LOGIN_SUCCESS` | Welcome back | You're signed in to Finsty. | Vendor OTP verified (`auth.controller` → `vendorVerifyOtp`) |
+| `LOGIN_SUCCESS` | Welcome to Finsty / Welcome back | First login → "Welcome to Finsty". Returning after 12+ days → "Welcome back". No login push within 12 days. | Vendor OTP verified (`auth.controller` → `vendorVerifyOtp`) |
 | `VENDOR_NEW_ORDER` | New order | Order #{orderNumber} needs your attention. | After payment confirms the order; one push per store owner (`notifyOrderPlacedAfterPayment`) |
 | `VENDOR_LOW_STOCK` | Low stock alert | {productName} is running low ({stock} left). | Variant stock updated and crosses **at or below** `lowStockThreshold` (was above threshold before) (`product.service` → `updateVariant`) |
 | `VENDOR_OUT_OF_STOCK` | Out of stock | {productName} is now out of stock. | Variant stock updated to `0` (was &gt; 0 before) (`product.service` → `updateVariant`) |
@@ -110,7 +110,7 @@ Stock alerts are **debounced**: only sent when crossing the threshold, not on ev
 
 | Type | Title | Body | When it is sent |
 |------|-------|------|-----------------|
-| `LOGIN_SUCCESS` | Welcome back | You're signed in to Finsty. | Admin OTP verified (`auth.controller` → `adminVerifyOtp`) |
+| `LOGIN_SUCCESS` | Welcome to Finsty / Welcome back | First login → "Welcome to Finsty". Returning after 12+ days → "Welcome back". No login push within 12 days. | Admin OTP verified (`auth.controller` → `adminVerifyOtp`) |
 
 Admin panel push for other events is **not** in scope for v1.
 
@@ -126,6 +126,7 @@ Every enqueued push is also stored in PostgreSQL (`notifications` table) before 
 | `GET /api/v1/notifications/unread-count` | Unread badge count |
 | `PATCH /api/v1/notifications/:notificationId/read` | Mark one read |
 | `PATCH /api/v1/notifications/read-all` | Mark all read (optional `{ "category": "orders" }` body) |
+| `DELETE /api/v1/notifications` | Delete one or more inbox rows — body `{ "ids": ["uuid", ...] }` (must belong to JWT user + role) |
 
 **Vendor `category` filter** (`GET /notifications?category=…`):
 
@@ -136,6 +137,10 @@ Every enqueued push is also stored in PostgreSQL (`notifications` table) before 
 | `account` | `LOGIN_SUCCESS` |
 
 **Customer categories:** `orders`, `payments`, `wallet`, `promotions`, `account`.
+
+### Retention
+
+Inbox rows older than **30 days** (`createdAt`) are permanently deleted by a daily BullMQ job (`notification-retention` queue), regardless of read status. See `notificationRetentionQueue.ts` / `notificationRetentionWorker.ts`.
 
 ## Not in scope (v1)
 
@@ -166,5 +171,7 @@ Every enqueued push is also stored in PostgreSQL (`notifications` table) before 
 | `notification.stock.ts` | Vendor low/out-of-stock |
 | `queues/notificationQueue.ts` | BullMQ queue |
 | `queues/notificationWorker.ts` | Worker |
+| `queues/notificationRetentionQueue.ts` | Daily 30-day inbox cleanup scheduler |
+| `queues/notificationRetentionWorker.ts` | Retention worker |
 
-Unit tests: `notification.messages.test.ts`, `fcmPayload.test.ts`.
+Unit tests: `notification.messages.test.ts`, `fcmPayload.test.ts`, `notification.inbox.retention.test.ts`.

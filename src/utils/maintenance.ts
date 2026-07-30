@@ -245,6 +245,46 @@ export async function backfillProductRatings(sequelize: any) {
 }
 
 /**
+ * Recomputes cached `stores.rating` / `stores.total_ratings` from approved
+ * `store_reviews`. Same stale-cache bug as product ratings when aggregate ran
+ * outside the submit transaction.
+ */
+export async function backfillStoreRatings(sequelize: any) {
+  try {
+    const [reviewsTableExists] = await sequelize.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables
+        WHERE table_schema = 'public'
+        AND table_name = 'store_reviews'
+      );
+    `);
+
+    if (!reviewsTableExists[0].exists) return;
+
+    const [, result]: any = await sequelize.query(`
+      UPDATE stores s
+      SET total_ratings = COALESCE(sub.cnt, 0),
+          rating = COALESCE(sub.avg, 0)
+      FROM (
+        SELECT store_id, COUNT(*)::int AS cnt, ROUND(AVG(rating)::numeric, 2) AS avg
+        FROM store_reviews
+        WHERE is_approved = true
+        GROUP BY store_id
+      ) sub
+      WHERE s.id = sub.store_id
+        AND (s.total_ratings <> sub.cnt OR s.rating <> sub.avg);
+    `);
+
+    const rowCount = typeof result === 'number' ? result : (result?.rowCount ?? 0);
+    if (rowCount > 0) {
+      logger.info(`Backfilled cached store rating aggregates for ${rowCount} store(s)`);
+    }
+  } catch (error) {
+    logger.error('Error while backfilling store ratings:', error);
+  }
+}
+
+/**
  * Ensures `sub_categories.can_return` exists in environments where
  * model sync/migrations are not run automatically.
  */

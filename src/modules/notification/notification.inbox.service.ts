@@ -1,3 +1,4 @@
+import { Op } from 'sequelize';
 import { AppError } from '@utils/appError';
 import { Roles } from '@modules/user/user.model';
 import NotificationInbox, { type NotificationCategory } from './notification-inbox.model';
@@ -7,6 +8,13 @@ import {
   resolveNotificationCategory,
 } from './notification.categories';
 import type { NotificationPayload, NotificationRole, NotificationType } from './notification.types';
+
+/** Inbox rows older than this many days are purged by the retention job. */
+export const NOTIFICATION_RETENTION_DAYS = 30;
+
+export function notificationRetentionCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - NOTIFICATION_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+}
 
 export interface ListNotificationsQuery {
   page?: number;
@@ -107,6 +115,36 @@ class NotificationInboxService {
     );
 
     return { updated };
+  }
+
+  async delete(ids: string[], userId: string, role: NotificationRole) {
+    const uniqueIds = [...new Set(ids.filter(Boolean))];
+    if (uniqueIds.length === 0) {
+      throw AppError.badRequest('At least one notification id is required', 'INVALID_NOTIFICATION_IDS');
+    }
+
+    const rows = await NotificationInbox.findAll({
+      where: { id: { [Op.in]: uniqueIds }, userId, role },
+      attributes: ['id'],
+    });
+
+    if (rows.length === 0) {
+      throw AppError.notFound('Notification not found', 'NOTIFICATION_NOT_FOUND');
+    }
+
+    const deletedIds = rows.map((row) => row.id);
+    await NotificationInbox.destroy({
+      where: { id: { [Op.in]: deletedIds }, userId, role },
+    });
+
+    return { deleted: deletedIds.length, ids: deletedIds };
+  }
+
+  /** Permanently delete inbox rows with `createdAt` strictly before `cutoff`. */
+  async deleteOlderThan(cutoff: Date): Promise<number> {
+    return NotificationInbox.destroy({
+      where: { createdAt: { [Op.lt]: cutoff } },
+    });
   }
 }
 

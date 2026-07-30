@@ -46,6 +46,15 @@ const storeReviewImageObject = {
   },
 } as const;
 
+const storeReviewUserObject = {
+  type: 'object',
+  nullable: true,
+  properties: {
+    name: { type: 'string', nullable: true },
+    profileImage: { type: 'string', nullable: true },
+  },
+} as const;
+
 const storeReviewObject = {
   type: 'object',
   properties: {
@@ -61,6 +70,41 @@ const storeReviewObject = {
     images: { type: 'array', items: storeReviewImageObject },
     createdAt: { type: 'string', nullable: true },
     updatedAt: { type: 'string', nullable: true },
+  },
+} as const;
+
+/** Public list item — reviewer identity as name/profile (no userId). */
+const storeReviewListItemObject = {
+  type: 'object',
+  properties: {
+    id: { type: 'string', format: 'uuid' },
+    storeId: { type: 'string', format: 'uuid' },
+    rating: { type: 'number' },
+    comment: { type: 'string', nullable: true },
+    response: { type: 'string', nullable: true, description: 'Vendor / admin reply' },
+    isApproved: { type: 'boolean' },
+    isFlagged: { type: 'boolean' },
+    flagReason: { type: 'string', nullable: true },
+    images: { type: 'array', items: storeReviewImageObject },
+    user: storeReviewUserObject,
+    createdAt: { type: 'string', nullable: true },
+    updatedAt: { type: 'string', nullable: true },
+  },
+} as const;
+
+const storeReviewAdminListItemObject = {
+  type: 'object',
+  properties: {
+    ...storeReviewObject.properties,
+    user: storeReviewUserObject,
+    store: {
+      type: 'object',
+      nullable: true,
+      properties: {
+        id: { type: 'string', format: 'uuid' },
+        name: { type: 'string' },
+      },
+    },
   },
 } as const;
 
@@ -143,7 +187,7 @@ export const listStoreReviewsSchema: FastifySchema = {
         data: {
           type: 'object',
           properties: {
-            items: { type: 'array', items: storeReviewObject },
+            items: { type: 'array', items: storeReviewListItemObject },
             pagination: paginationMeta,
           },
         },
@@ -217,7 +261,7 @@ export const adminListStoreReviewsSchema: FastifySchema = {
         data: {
           type: 'object',
           properties: {
-            items: { type: 'array', items: storeReviewObject },
+            items: { type: 'array', items: storeReviewAdminListItemObject },
             pagination: paginationMeta,
           },
         },

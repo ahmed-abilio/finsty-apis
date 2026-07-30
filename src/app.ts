@@ -35,6 +35,7 @@ import brandRoutes from '@modules/brand/brand.routes';
 import shadowfaxRoutes from '@modules/shadowfax/shadowfax.routes';
 import shadowfaxWebhookRoutes from '@modules/shadowfax/tracking/shadowfax-webhook.routes';
 import platformSettingsAdminRoutes from '@modules/platform-settings/platform-settings.admin.routes';
+import platformSettingsPublicRoutes from '@modules/platform-settings/platform-settings.public.routes';
 import configRoutes from '@modules/config/config.routes';
 import notificationInboxRoutes from '@modules/notification/notification.inbox.routes';
 import { cmsRoutes, adminCmsRoutes } from '@modules/cms/cms.routes';
@@ -51,6 +52,8 @@ import orderExpiryQueue from '@queues/orderExpiryQueue';
 import shadowfaxQueue from '@queues/shadowfaxQueue';
 import shadowfaxReconciliationQueue from '@queues/shadowfaxReconciliationQueue';
 import notificationQueue from '@queues/notificationQueue';
+import notificationRetentionQueue from '@queues/notificationRetentionQueue';
+import cartAbandonmentQueue from '@queues/cartAbandonmentQueue';
 import { getShadowfaxMetrics } from '@observability/shadowfax.metrics';
 import { formatError } from './utils/errorFormatter';
 
@@ -177,6 +180,9 @@ export async function buildApp(): Promise<FastifyInstance> {
   await fastify.register(platformSettingsAdminRoutes, {
     prefix: `${API_PREFIX}/admin/platform-settings`,
   });
+  await fastify.register(platformSettingsPublicRoutes, {
+    prefix: `${API_PREFIX}/platform-settings`,
+  });
   await fastify.register(configRoutes, { prefix: `${API_PREFIX}/config` });
   await fastify.register(cmsRoutes, { prefix: `${API_PREFIX}/cms` });
   await fastify.register(adminCmsRoutes, { prefix: `${API_PREFIX}/admin/cms` });
@@ -200,6 +206,8 @@ export async function buildApp(): Promise<FastifyInstance> {
       new BullMQAdapter(shadowfaxQueue) as unknown as BaseAdapter,
       new BullMQAdapter(shadowfaxReconciliationQueue) as unknown as BaseAdapter,
       new BullMQAdapter(notificationQueue) as unknown as BaseAdapter,
+      new BullMQAdapter(notificationRetentionQueue) as unknown as BaseAdapter,
+      new BullMQAdapter(cartAbandonmentQueue) as unknown as BaseAdapter,
     ],
     serverAdapter,
   });

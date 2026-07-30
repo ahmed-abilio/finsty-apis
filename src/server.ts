@@ -12,9 +12,12 @@ import {
   ensureVariantSizeChartColumn,
   ensureSubCategoryCanReturnColumn,
   backfillProductRatings,
+  backfillStoreRatings,
 } from '@utils/maintenance';
 import { scheduleOrderExpiryJob } from '@queues/orderExpiryQueue';
 import { scheduleShadowfaxReconciliationJob } from '@queues/shadowfaxReconciliationQueue';
+import { scheduleNotificationRetentionJob } from '@queues/notificationRetentionQueue';
+import { scheduleCartAbandonmentJob } from '@queues/cartAbandonmentQueue';
 
 const PORT = parseInt(process.env.PORT ?? '3000', 10);
 const HOST = process.env.HOST ?? '0.0.0.0';
@@ -35,8 +38,11 @@ async function start() {
     await ensureVariantSizeChartColumn(sequelize);
     await ensureSubCategoryCanReturnColumn(sequelize);
     await backfillProductRatings(sequelize);
+    await backfillStoreRatings(sequelize);
     await scheduleOrderExpiryJob();
     await scheduleShadowfaxReconciliationJob();
+    await scheduleNotificationRetentionJob();
+    await scheduleCartAbandonmentJob();
 
     // ── Optional dev sync (disabled by default) ───────────────────────────────
     // For schema-breaking migrations, auto `alter` can fail before migrations run.
@@ -56,6 +62,8 @@ async function start() {
       import('@queues/shadowfaxWorker'),
       import('@queues/shadowfaxReconciliationWorker'),
       import('@queues/notificationWorker'),
+      import('@queues/notificationRetentionWorker'),
+      import('@queues/cartAbandonmentWorker'),
     ]);
 
     // ── Start Fastify ────────────────────────────────────────────────────────
